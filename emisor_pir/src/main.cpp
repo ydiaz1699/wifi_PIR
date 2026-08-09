@@ -13,10 +13,10 @@ const int pinPIR = D2;
 const int pinTimbre = D3;   // botón de timbre, INPUT_PULLUP, activo en LOW
 
 // --- Timings ---
-const unsigned long ANTIREBOTE_PIR_MS = 2000;
+const unsigned long ANTIREBOTE_PIR_MS = 500;       // V3.3 fix: era 2000 → 500ms para detectar pulsos rápidos
 const unsigned long ANTIREBOTE_TIMBRE_MS = 800;
-const unsigned long TIMEOUT_ACK_MS = 500;       // V3.2: era 300 → 500ms para tolerar latencia
-const int MAX_REINTENTOS = 5;                   // V3.2: era 3 → 5 reintentos para sobrevivir bloqueos del receptor
+const unsigned long TIMEOUT_ACK_MS = 500;
+const int MAX_REINTENTOS = 5;
 const unsigned long WIFI_RETRY_MS = 5000;
 const char* DEVICE_ID = "PIR01";
 
@@ -26,6 +26,12 @@ bool pirAnterior = LOW;
 bool timbreAnterior = HIGH; // pull-up: reposo en HIGH, presionado en LOW
 
 uint32_t eventCounter = 0;
+
+// --- Buffer de eventos pendientes (V3.3 fix) ---
+// Si txState no está IDLE cuando se detecta un evento,
+// se guarda aquí y se envía en el siguiente loop libre.
+enum class EventoPendiente { NINGUNO, MOTION, TIMBRE };
+EventoPendiente pendiente = EventoPendiente::NINGUNO;
 
 enum class TipoEvento { MOTION, TIMBRE };
 
@@ -140,7 +146,7 @@ void manejarEnvio() {
 void setup() {
     Serial.begin(115200);
     delay(100);
-    LOG_INFO("===== Boot Emisor PIR+Timbre v3.2 =====");
+    LOG_INFO("===== Boot Emisor PIR+Timbre v3.3.1 =====");
     ESP.wdtEnable(8000);
     pinMode(pinPIR, INPUT);
     pinMode(pinTimbre, INPUT_PULLUP);
@@ -153,6 +159,18 @@ void loop() {
     manejarWiFi();
     manejarEnvio();
 
+    // --- Enviar evento pendiente si TX está libre ---
+    if (pendiente != EventoPendiente::NINGUNO && txState == TxState::IDLE) {
+        if (pendiente == EventoPendiente::MOTION) {
+            iniciarEnvio(TipoEvento::MOTION);
+            LOG_INFO("Evento MOTION pendiente enviado");
+        } else if (pendiente == EventoPendiente::TIMBRE) {
+            iniciarEnvio(TipoEvento::TIMBRE);
+            LOG_INFO("Evento TIMBRE pendiente enviado");
+        }
+        pendiente = EventoPendiente::NINGUNO;
+    }
+
     // --- PIR: flanco de subida ---
     bool pirActual = digitalRead(pinPIR) == HIGH;
     if (pirActual && !pirAnterior) {
@@ -163,7 +181,8 @@ void loop() {
             if (txState == TxState::IDLE) {
                 iniciarEnvio(TipoEvento::MOTION);
             } else {
-                LOG_WARN("Envio anterior en curso, evento MOTION descartado");
+                pendiente = EventoPendiente::MOTION;
+                LOG_INFO("MOTION encolado (TX ocupado)");
             }
         }
     }
@@ -179,7 +198,8 @@ void loop() {
             if (txState == TxState::IDLE) {
                 iniciarEnvio(TipoEvento::TIMBRE);
             } else {
-                LOG_WARN("Envio anterior en curso, evento TIMBRE descartado");
+                pendiente = EventoPendiente::TIMBRE;
+                LOG_INFO("TIMBRE encolado (TX ocupado)");
             }
         }
     }
