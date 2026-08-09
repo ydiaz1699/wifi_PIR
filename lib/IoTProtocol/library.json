@@ -1,0 +1,11 @@
+{
+    "name": "IoTProtocol",
+    "version": "4.0.0",
+    "description": "Universal binary protocol for ESP8266/ESP32 IoT sensor networks over UDP",
+    "keywords": "iot, protocol, udp, sensor, binary, tlv, esp8266, esp32",
+    "authors": {
+        "name": "ydiaz1699"
+    },
+    "frameworks": "arduino",
+    "platforms": ["espressif8266", "espressif32"]
+}
