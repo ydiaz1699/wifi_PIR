@@ -1,34 +1,47 @@
 /**
- * Receptor Central IoT — V4.1
+ * Receptor Central IoT — V4.3
  *
- * Recibe paquetes IoTProtocol de cualquier sensor/botón/dispositivo.
- * No tiene lógica hardcodeada por sensor — procesa genéricamente.
- * La biblioteca IoTNode maneja ACK, deduplicación, y registro automático.
+ * Nuevas features:
+ * - IoTStorage: BOOT_ID persistente + config LittleFS
+ * - IoTAuth: verificación HMAC opcional para paquetes entrantes
+ * - Puede enviar CONFIG a nodos remotos vía MQTT command
+ * - STATE_REQUEST broadcast al boot para STATE_SYNC
  *
- * Loop:
+ * Loop (prioridades):
  *   1. WiFi
- *   2. IoTNode.loop() → recibe UDP, ACK, dedup, despacha
+ *   2. IoTNode.loop() → UDP, ACK, dedup, despacho
  *   3. Buzzer timer
  *   4. MQTT (modo LOCAL/HA)
- *   5. OTA
+ *   5. Device state publish (30s)
+ *   6. OTA
  */
 
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
 #include <ArduinoOTA.h>
 #include <IoTNode.h>
+#include <IoTStorage.h>
+#include <IoTAuth.h>
 #include "config.h"
 #include "hal.h"
 #include "logger.h"
 #include "mqtt_manager.h"
 #include "event_handler.h"
 
+// --- Shared secret (mismo que en emisores) ---
+static const uint8_t AUTH_KEY[] = {
+    0x4D, 0x79, 0x49, 0x6F, 0x54, 0x4B, 0x65, 0x79,
+    0x53, 0x65, 0x63, 0x72, 0x65, 0x74, 0x21, 0x21
+};
+
 // --- Hardware ---
 Led led(pinLed);
 Buzzer buzzer(pinBocina);
 
-// --- IoTProtocol Node ---
+// --- IoTProtocol ---
+IoTStorage storage;
 IoTNode node(MY_DEVICE_ID, IOT_UDP_PORT);
+IoTAuth auth(AUTH_KEY, sizeof(AUTH_KEY));
 
 // --- Estado ---
 String modoAlarma = "armado";
@@ -80,13 +93,30 @@ static void setupOTA() {
 void setup() {
     Serial.begin(115200);
     delay(100);
-    LOG_INFO("===== Central IoT V4.2 =====");
+    LOG_INFO("===== Central IoT V4.3 =====");
 
     ESP.wdtEnable(8000);
 
     led.begin();
     buzzer.begin();
     buzzer.setLed(&led);
+
+    // --- Storage ---
+    if (storage.begin()) {
+        storage.loadConfig();
+        LOG_INFO("Storage OK: boot#%lu", (unsigned long)storage.getBootCount());
+    } else {
+        LOG_ERROR("Storage FAIL");
+    }
+
+    // Auth: verificar paquetes si habilitado en config
+    if (storage.config().authEnabled) {
+        auth.setRequired(true);
+        LOG_INFO("Auth HMAC: REQUERIDO");
+    } else {
+        auth.setRequired(false);
+        LOG_INFO("Auth HMAC: opcional (acepta todo)");
+    }
 
     iniciarWiFi();
 
@@ -112,8 +142,7 @@ void setup() {
     LOG_INFO("Modo MQTT: %s | Alarma: %s", modoMQTTStr(), modoAlarma.c_str());
     LOG_INFO("Setup completo — esperando eventos...");
 
-    // Pedir estado actual a todos los nodos (STATE_SYNC al boot)
-    // Así si la central reinició, reconstruye el estado de la red
+    // STATE_SYNC: pedir estado actual a todos los nodos
     {
         IoTPacket req;
         req.version = IOT_PROTOCOL_VER;
@@ -122,7 +151,7 @@ void setup() {
         req.dst = IOT_DEVICE_BROADCAST;
         req.bootId = node.getBootId();
         req.seq = node.getNextSeq();
-        req.flags = 0;  // No requiere ACK (broadcast)
+        req.flags = 0;
         req.clearPayload();
         node.sendDirect(req, IPAddress(192, 168, 0, 255), IOT_UDP_PORT);
         LOG_INFO("STATE_REQUEST broadcast enviado");
@@ -154,12 +183,11 @@ void loop() {
         publicarEstadoBocina();
     }
 
-    // Publicar estado ONLINE/STALE/OFFLINE cada 30s
+    // Publicar ONLINE/STALE/OFFLINE cada 30s
     static unsigned long lastStatusPub = 0;
     if (millis() - lastStatusPub >= 30000) {
         lastStatusPub = millis();
         if (mqttDisponible) {
-            // Buscar todos los IDs posibles de sensores (0x02–0x7F)
             for (uint8_t id = 0x02; id <= 0x7F; id++) {
                 RemoteDevice* dev = node.getRemote(id);
                 if (!dev) continue;

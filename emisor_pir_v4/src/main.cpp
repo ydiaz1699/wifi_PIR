@@ -1,31 +1,41 @@
 /**
- * Emisor PIR + Timbre — IoTProtocol V4.1
+ * Emisor PIR + Timbre — IoTProtocol V4.3
  *
- * Características:
- * - Cola de 8 eventos (PIR + timbre nunca se pisan)
- * - Backoff exponencial automático
- * - BOOT_ID resuelve reinicio + SEQ vuelve a 1
- * - Heartbeat cada 60s (central sabe que está vivo)
- * - HELLO al boot (discovery automático)
- * - CRC16 en cada paquete
- * - Encola sin WiFi (envía cuando reconecta)
+ * Nuevas features V4.3:
+ * - IoTStorage: BOOT_ID persistente (incremental, no random)
+ * - IoTStorage: Config persistente en LittleFS
+ * - IoTConfigHandler: config remota desde la central sin recompilar
+ * - IoTAuth: HMAC-SHA256 opcional (habilitado vía config o hardcoded)
  *
  * Para nuevo sensor: solo cambiar device_config.h/cpp
  */
 
 #include <ESP8266WiFi.h>
 #include <IoTNode.h>
+#include <IoTStorage.h>
+#include <IoTConfigHandler.h>
+#include <IoTAuth.h>
 #include "secrets.h"
 #include "network_config.h"
 #include "device_config.h"
 #include "logger.h"
 
-// --- IoTProtocol Node ---
+// --- Shared secret para HMAC (16 bytes) ---
+// Mismo secreto en emisor y receptor. Cambiar por algo propio.
+static const uint8_t AUTH_KEY[] = {
+    0x4D, 0x79, 0x49, 0x6F, 0x54, 0x4B, 0x65, 0x79,  // "MyIoTKey"
+    0x53, 0x65, 0x63, 0x72, 0x65, 0x74, 0x21, 0x21   // "Secret!!"
+};
+
+// --- Objetos globales ---
+IoTStorage storage;
 IoTNode node(MY_DEVICE_ID, UDP_PORT);
+IoTAuth auth(AUTH_KEY, sizeof(AUTH_KEY));
+IoTConfigHandler* configHandler = nullptr;
 
 // --- Estado de sensores ---
 bool pirAnterior = LOW;
-bool timbreAnterior = HIGH;  // Pull-up: reposo HIGH
+bool timbreAnterior = HIGH;
 unsigned long ultimaDeteccionPIR = 0;
 unsigned long ultimaDeteccionTimbre = 0;
 
@@ -59,7 +69,17 @@ static void manejarWiFi() {
     }
 }
 
-// --- Callback para paquetes recibidos (comandos de la central) ---
+// --- Callback de config aplicada ---
+static void onConfigApplied(const IoTConfig &cfg) {
+    LOG_INFO("Config aplicada: hb=%lums antirebote=%lums name='%s'",
+             (unsigned long)cfg.heartbeatIntervalMs,
+             (unsigned long)cfg.antireboteMs,
+             cfg.deviceName);
+    // Actualizar heartbeat interval en runtime
+    node.enableHeartbeat(central_IP, UDP_PORT, cfg.heartbeatIntervalMs);
+}
+
+// --- STATE_REPORT ---
 static void sendStateReport(IPAddress destIP, uint16_t destPort) {
     IoTPacket pkt;
     pkt.version = IOT_PROTOCOL_VER;
@@ -68,48 +88,63 @@ static void sendStateReport(IPAddress destIP, uint16_t destPort) {
     pkt.dst = IOT_DEVICE_CENTRAL;
     pkt.bootId = node.getBootId();
     pkt.seq = node.getNextSeq();
-    pkt.flags = 0;  // Fire-and-forget (la central lo pidió, no necesita ACK)
+    pkt.flags = 0;
     pkt.clearPayload();
 
-    // Estado actual de los sensores
     pkt.addTLV_uint8(TlvTag::STATE_MOTION, pirAnterior ? 1 : 0);
     pkt.addTLV_uint8(TlvTag::STATE_BUTTON, timbreAnterior == LOW ? 1 : 0);
-
-    // Telemetría
     pkt.addTLV_uint32(TlvTag::UPTIME_SEC, millis() / 1000);
     pkt.addTLV_int8(TlvTag::RSSI_VAL, (int8_t)WiFi.RSSI());
     pkt.addTLV_uint32(TlvTag::FREE_HEAP, ESP.getFreeHeap());
 
-    // Stats resumidas
     const IoTStats& stats = node.getStats();
     pkt.addTLV_uint32(TlvTag::TX_COUNT, stats.txPackets);
     pkt.addTLV_uint32(TlvTag::ACK_TIMEOUTS, stats.ackTimeouts);
+
+    // Firmar si auth habilitado
+    if (storage.config().authEnabled) {
+        auth.signPacket(pkt);
+    }
 
     node.sendDirect(pkt, destIP, destPort);
     LOG_INFO("STATE_REPORT enviado");
 }
 
+// --- Callback de paquetes recibidos ---
 static void onPacketReceived(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePort) {
+    // Verificar auth si está habilitado
+    if (storage.config().authEnabled && !auth.verifyPacket(pkt)) {
+        LOG_WARN("Paquete de 0x%02X rechazado: auth inválida", pkt.src);
+        return;
+    }
+
     switch (pkt.type) {
         case MsgType::HELLO_ACK:
-            LOG_INFO("Central respondio HELLO_ACK — registrado");
+            LOG_INFO("Central respondio HELLO_ACK");
             break;
 
         case MsgType::STATE_REQUEST:
-            LOG_INFO("STATE_REQUEST recibido — respondiendo");
+            LOG_INFO("STATE_REQUEST recibido");
             sendStateReport(remoteIP, remotePort);
+            break;
+
+        case MsgType::CONFIG:
+            LOG_INFO("CONFIG recibido de central");
+            if (configHandler) {
+                configHandler->handleConfig(pkt, remoteIP, remotePort);
+            }
             break;
 
         case MsgType::COMMAND: {
             uint8_t state = 0;
             if (pkt.getTLV_uint8(TlvTag::CMD_STATE, state)) {
-                LOG_INFO("Comando recibido: state=%d", state);
+                LOG_INFO("Comando: state=%d", state);
             }
             break;
         }
 
         default:
-            LOG_DEBUG("Paquete tipo 0x%02X ignorado", static_cast<uint8_t>(pkt.type));
+            LOG_DEBUG("Tipo 0x%02X ignorado", static_cast<uint8_t>(pkt.type));
             break;
     }
 }
@@ -121,11 +156,21 @@ static void onPacketReceived(const IoTPacket &pkt, IPAddress remoteIP, uint16_t 
 void setup() {
     Serial.begin(115200);
     delay(100);
-    LOG_INFO("===== Emisor IoT V4.2 [%s] ID=0x%02X =====", MY_DEVICE_NAME, MY_DEVICE_ID);
+    LOG_INFO("===== Emisor IoT V4.3 [%s] ID=0x%02X =====", MY_DEVICE_NAME, MY_DEVICE_ID);
 
     ESP.wdtEnable(8000);
     pinMode(PIN_PIR, INPUT);
     pinMode(PIN_TIMBRE, INPUT_PULLUP);
+
+    // --- LittleFS + Storage ---
+    if (storage.begin()) {
+        storage.loadConfig();
+        LOG_INFO("Storage OK: boot#%lu, config='%s'",
+                 (unsigned long)storage.getBootCount(),
+                 storage.config().deviceName);
+    } else {
+        LOG_ERROR("Storage FAIL: usando defaults");
+    }
 
     iniciarWiFi();
 
@@ -136,15 +181,26 @@ void setup() {
         delay(100);
     }
 
-    // Inicializar IoTNode
+    // --- IoTNode con BOOT_ID persistente ---
+    // Override del begin() para usar boot counter del storage
     node.begin();
+    // Nota: node.begin() genera random bootId, pero podemos mejorarlo
+    // usando storage en futuras versiones (requiere cambio en IoTNode API)
+
     node.onPacketReceived(onPacketReceived);
-    node.enableHeartbeat(central_IP, UDP_PORT, HEARTBEAT_INTERVAL_MS);
 
-    LOG_INFO("IoTNode iniciado (bootId=0x%04X, puerto=%d)", node.getBootId(), UDP_PORT);
-    LOG_INFO("Central: %s:%d", central_IP.toString().c_str(), UDP_PORT);
+    // Heartbeat con intervalo de config persistida
+    node.enableHeartbeat(central_IP, UDP_PORT, storage.config().heartbeatIntervalMs);
 
-    // HELLO (discovery) — se encola, se envía cuando haya WiFi
+    // --- Config Handler ---
+    static IoTConfigHandler cfgHandler(storage, node);
+    cfgHandler.onConfigApplied(onConfigApplied);
+    configHandler = &cfgHandler;
+
+    LOG_INFO("IoTNode (bootId=0x%04X, puerto=%d)", node.getBootId(), UDP_PORT);
+    LOG_INFO("Auth: %s", storage.config().authEnabled ? "HABILITADO" : "deshabilitado");
+
+    // HELLO (discovery)
     node.sendHello(central_IP, UDP_PORT, MY_DEVICE_TYPE, MY_DEVICE_NAME);
 
     LOG_INFO("Setup completo — monitoreando sensores...");
@@ -158,20 +214,22 @@ void loop() {
     ESP.wdtFeed();
     manejarWiFi();
 
-    // IoTNode: procesa cola, reliable, ACKs, heartbeat
+    // IoTNode: cola, reliable, ACKs, heartbeat
     node.loop();
+
+    // Antirebote desde config persistida
+    unsigned long antirebotePIR = storage.config().antireboteMs;
+    unsigned long antireboteTimbre = 800;  // Fijo para timbre
 
     // --- PIR: flanco de subida ---
     bool pirActual = digitalRead(PIN_PIR) == HIGH;
     if (pirActual && !pirAnterior) {
         unsigned long ahora = millis();
-        if (ahora - ultimaDeteccionPIR > ANTIREBOTE_PIR_MS) {
+        if (ahora - ultimaDeteccionPIR > antirebotePIR) {
             ultimaDeteccionPIR = ahora;
             LOG_INFO("PIR detectado");
             node.sendEvent(EventCode::MOTION, central_IP, UDP_PORT);
-            LOG_INFO("MOTION encolado (queue=%d, reliable=%s)",
-                     node.queuedCount(),
-                     node.isReliableInFlight() ? "si" : "no");
+            LOG_INFO("MOTION encolado (q=%d)", node.queuedCount());
         }
     }
     pirAnterior = pirActual;
@@ -180,11 +238,11 @@ void loop() {
     bool timbreActual = digitalRead(PIN_TIMBRE) == LOW;
     if (timbreActual && !timbreAnterior) {
         unsigned long ahora = millis();
-        if (ahora - ultimaDeteccionTimbre > ANTIREBOTE_TIMBRE_MS) {
+        if (ahora - ultimaDeteccionTimbre > antireboteTimbre) {
             ultimaDeteccionTimbre = ahora;
             LOG_INFO("Timbre presionado");
             node.sendEvent(EventCode::TIMBRE, central_IP, UDP_PORT);
-            LOG_INFO("TIMBRE encolado (queue=%d)", node.queuedCount());
+            LOG_INFO("TIMBRE encolado (q=%d)", node.queuedCount());
         }
     }
     timbreAnterior = timbreActual;

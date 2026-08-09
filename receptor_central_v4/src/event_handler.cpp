@@ -1,9 +1,10 @@
 /**
- * Event Handler V4.1 — Procesamiento genérico de eventos IoTProtocol
+ * Event Handler V4.3 — Procesamiento genérico de eventos IoTProtocol
  *
  * El receptor NO necesita saber de antemano qué sensores existen.
  * Cualquier dispositivo que envíe un EVENT válido será procesado.
  * La acción depende del EventCode y del modo actual (armado/desarmado).
+ * V4.3: verifica HMAC si auth está habilitado.
  */
 
 #include "event_handler.h"
@@ -11,8 +12,12 @@
 #include "config.h"
 #include "logger.h"
 #include <PubSubClient.h>
+#include <IoTAuth.h>
+#include <IoTStorage.h>
 
 extern Buzzer buzzer;
+extern IoTAuth auth;
+extern IoTStorage storage;
 extern PubSubClient mqtt;
 extern bool mqttDisponible;
 extern String modoAlarma;
@@ -146,6 +151,13 @@ static void publishStateReport(uint8_t srcId, const IoTPacket &pkt) {
 // ============================================================
 
 void handleIoTPacket(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePort) {
+    // --- Auth verification V4.3 ---
+    if (storage.config().authEnabled && !auth.verifyPacket(pkt)) {
+        LOG_WARN("Paquete 0x%02X de 0x%02X rechazado: HMAC inválida", 
+                 static_cast<uint8_t>(pkt.type), pkt.src);
+        return;
+    }
+
     switch (pkt.type) {
         case MsgType::EVENT: {
             uint8_t eventType = 0, eventValue = 1;

@@ -157,6 +157,15 @@ enum class TlvTag : uint8_t {
     FW_VERSION      = 0x63,   // string: "4.1.0"
     BOOT_ID_TAG     = 0x64,   // uint16_t: boot_id (para HELLO)
 
+    // Config remota (Central → Nodo via MsgType::CONFIG)
+    CFG_HEARTBEAT_MS  = 0x70, // uint32_t: nuevo intervalo heartbeat (ms)
+    CFG_ANTIREBOTE_MS = 0x71, // uint32_t: nuevo antirebote (ms)
+    CFG_DEVICE_NAME   = 0x72, // string: nuevo nombre de dispositivo
+    CFG_AUTH_ENABLE   = 0x73, // uint8_t: 0=disable, 1=enable auth
+    CFG_REBOOT        = 0x74, // uint8_t: 1=reiniciar dispositivo
+    CFG_RESET_STATS   = 0x75, // uint8_t: 1=resetear estadísticas
+    CFG_VERSION       = 0x76, // uint8_t: versión de la config aplicada
+
     // === Timestamps/Telemetría (0x80–0x8F) ===
     UPTIME_SEC      = 0x80,   // uint32_t: segundos desde boot
     TIMESTAMP_MS    = 0x81,   // uint32_t: millis() del emisor
