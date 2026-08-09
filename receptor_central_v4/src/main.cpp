@@ -138,5 +138,28 @@ void loop() {
         publicarEstadoBocina();
     }
 
+    // Publicar estado ONLINE/STALE/OFFLINE cada 30s
+    static unsigned long lastStatusPub = 0;
+    if (millis() - lastStatusPub >= 30000) {
+        lastStatusPub = millis();
+        if (mqttDisponible) {
+            // Buscar todos los IDs posibles de sensores (0x02–0x7F)
+            for (uint8_t id = 0x02; id <= 0x7F; id++) {
+                RemoteDevice* dev = node.getRemote(id);
+                if (!dev) continue;
+                char topic[48];
+                snprintf(topic, sizeof(topic), "casa/iot/device_%02X/status", dev->id);
+                const char* stateStr = "unknown";
+                switch (dev->state) {
+                    case DeviceState::ONLINE:  stateStr = "online"; break;
+                    case DeviceState::STALE:   stateStr = "stale"; break;
+                    case DeviceState::OFFLINE: stateStr = "offline"; break;
+                    default: break;
+                }
+                mqtt.publish(topic, stateStr, true);
+            }
+        }
+    }
+
     ArduinoOTA.handle();
 }

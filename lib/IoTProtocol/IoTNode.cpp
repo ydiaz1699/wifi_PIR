@@ -1,12 +1,12 @@
 /**
- * IoTNode V4.1 — Implementación completa
+ * IoTNode V4.1.1 — Implementación con hardening
  *
- * - FIFO con prioridades (URGENT > NORMAL > BACKGROUND)
- * - Un solo canal reliable en vuelo
- * - Backoff exponencial
- * - Deduplicación con BOOT_ID
- * - Sin WiFi: cola bufferiza, envía cuando vuelva
- * - Overflow: DROP_OLDEST_BG por defecto
+ * Fixes vs V4.1:
+ * - Dedup Window: ventana circular de últimos 8 SEQ por dispositivo
+ * - ACK siempre se envía (incluso para duplicados)
+ * - Device Registry ampliado (type, name, fw, state)
+ * - ONLINE/STALE/OFFLINE state machine
+ * - _fillRemoteFromHello() para registrar info de HELLO
  */
 
 #include "IoTNode.h"
@@ -20,7 +20,7 @@ IoTNode::IoTNode(uint8_t deviceId, uint16_t udpPort)
     : _deviceId(deviceId), _udpPort(udpPort), _bootId(0), _seq(0),
       _queueCount(0), _overflowPolicy(QueueOverflow::DROP_OLDEST_BG),
       _hbEnabled(false), _hbInterval(IOT_HEARTBEAT_INTERVAL),
-      _lastHb(0), _handler(nullptr)
+      _lastHb(0), _lastStateCheck(0), _handler(nullptr)
 {
     memset(_queue, 0, sizeof(_queue));
     memset(_remotes, 0, sizeof(_remotes));
@@ -31,6 +31,7 @@ void IoTNode::begin() {
     randomSeed(analogRead(A0) ^ micros());
     _bootId = (uint16_t)(random(1, 65535));
     _seq = 0;
+    _lastStateCheck = millis();
     _udp.begin(_udpPort);
 }
 
@@ -43,10 +44,17 @@ void IoTNode::loop() {
     _processReliable();
     _processQueue();
     if (_hbEnabled) _sendHeartbeat();
+
+    // Actualizar estados cada 10 segundos
+    unsigned long ahora = millis();
+    if (ahora - _lastStateCheck >= 10000) {
+        _lastStateCheck = ahora;
+        _updateDeviceStates();
+    }
 }
 
 // ============================================================
-// Transmisión UDP (bajo nivel)
+// Transmisión UDP
 // ============================================================
 
 void IoTNode::_transmitPacket(const IoTPacket &pkt, IPAddress destIP, uint16_t destPort) {
@@ -65,12 +73,11 @@ void IoTNode::sendDirect(const IoTPacket &pkt, IPAddress destIP, uint16_t destPo
 }
 
 // ============================================================
-// Canal reliable (1 paquete en vuelo)
+// Canal reliable
 // ============================================================
 
 void IoTNode::_processReliable() {
     if (!_reliable.active) return;
-
     unsigned long ahora = millis();
 
     if (_reliable.waitingAck && ahora < _reliable.nextRetryAt) return;
@@ -149,8 +156,7 @@ int IoTNode::_findHighestPriorityEntry() const {
     for (int i = 0; i < IOT_QUEUE_SIZE; i++) {
         if (!_queue[i].occupied) continue;
         if (best == -1 || _queue[i].priority < bestPri) {
-            best = i;
-            bestPri = _queue[i].priority;
+            best = i; bestPri = _queue[i].priority;
         }
     }
     return best;
@@ -162,8 +168,7 @@ int IoTNode::_findLowestPriorityEntry() const {
     for (int i = 0; i < IOT_QUEUE_SIZE; i++) {
         if (!_queue[i].occupied) continue;
         if (worst == -1 || _queue[i].priority > worstPri) {
-            worst = i;
-            worstPri = _queue[i].priority;
+            worst = i; worstPri = _queue[i].priority;
         }
     }
     return worst;
@@ -189,7 +194,6 @@ bool IoTNode::enqueue(IoTPacket &pkt, IPAddress destIP, uint16_t destPort) {
     switch (_overflowPolicy) {
         case QueueOverflow::DROP_NEWEST:
             return false;
-
         case QueueOverflow::DROP_OLDEST_BG: {
             if (pri == Priority::BACKGROUND) return false;
             int victim = -1;
@@ -205,7 +209,6 @@ bool IoTNode::enqueue(IoTPacket &pkt, IPAddress destIP, uint16_t destPort) {
             _queue[victim].priority = pri;
             return true;
         }
-
         case QueueOverflow::DROP_OLDEST: {
             int victim = _findLowestPriorityEntry();
             if (victim < 0) return false;
@@ -225,7 +228,7 @@ void IoTNode::setOverflowPolicy(QueueOverflow policy) {
 }
 
 // ============================================================
-// Recepción
+// Recepción — FIX: ACK se envía SIEMPRE (antes de dedup check)
 // ============================================================
 
 void IoTNode::_processIncoming() {
@@ -244,21 +247,35 @@ void IoTNode::_processIncoming() {
 
     if (pkt.dst != _deviceId && pkt.dst != IOT_DEVICE_BROADCAST) return;
 
+    // Actualizar tabla de remotos (IP, port, lastSeen)
     _updateRemote(pkt.src, remoteIP, remotePort, pkt.bootId, pkt.seq);
 
+    // ACK propio → procesar contra canal reliable
     if (pkt.type == MsgType::ACK) {
         _handleAck(pkt);
         return;
     }
 
+    // *** FIX V4.1.1: ACK se envía SIEMPRE, incluso para duplicados ***
+    // Si el emisor retransmite porque no recibió nuestro ACK anterior,
+    // debemos responder ACK de nuevo aunque ya hayamos procesado el evento.
     if (pkt.needsAck()) {
         _sendAutoAck(pkt, remoteIP, remotePort);
     }
 
+    // Deduplicación con ventana (solo para reliable)
     if (pkt.isReliable() && _isDuplicate(pkt.src, pkt.bootId, pkt.seq)) {
+        // ACK ya se envió arriba, pero NO volvemos a procesar el evento
         return;
     }
 
+    // Si es HELLO, llenar el registry con la info del dispositivo
+    if (pkt.type == MsgType::HELLO) {
+        RemoteDevice* dev = getRemote(pkt.src);
+        if (dev) _fillRemoteFromHello(*dev, pkt);
+    }
+
+    // Despachar al handler del usuario
     if (_handler) {
         _handler(pkt, remoteIP, remotePort);
     }
@@ -278,7 +295,6 @@ void IoTNode::_sendAutoAck(const IoTPacket &pkt, IPAddress remoteIP, uint16_t re
     ack.seq = pkt.seq;
     ack.flags = 0;
     ack.clearPayload();
-
     sendDirect(ack, remoteIP, remotePort);
 }
 
@@ -290,53 +306,103 @@ void IoTNode::_handleAck(const IoTPacket &pkt) {
 }
 
 // ============================================================
-// Deduplicación con BOOT_ID
+// Deduplicación con VENTANA (Fix V4.1.1)
+//
+// Mantiene una ventana circular de los últimos IOT_DEDUP_WINDOW SEQ
+// procesados por cada remoto. Si el SEQ entrante está en la ventana,
+// es duplicado. Si BOOT_ID cambió, se resetea la ventana.
 // ============================================================
 
 bool IoTNode::_isDuplicate(uint8_t srcId, uint16_t bootId, uint32_t seq) {
+    RemoteDevice* dev = nullptr;
     for (int i = 0; i < IOT_MAX_REMOTES; i++) {
-        if (!_remotes[i].active || _remotes[i].id != srcId) continue;
-
-        if (_remotes[i].lastBootId != bootId) {
-            _remotes[i].lastBootId = bootId;
-            _remotes[i].lastSeq = seq;
-            return false;
+        if (_remotes[i].active && _remotes[i].id == srcId) {
+            dev = &_remotes[i];
+            break;
         }
+    }
+    if (!dev) return false;  // Dispositivo desconocido → no es duplicado
 
-        if (_remotes[i].lastSeq == seq) return true;
-        _remotes[i].lastSeq = seq;
+    // Si BOOT_ID cambió → dispositivo reinició → resetear ventana
+    if (dev->bootId != bootId) {
+        dev->bootId = bootId;
+        dev->seqWindowCount = 0;
+        dev->seqWindowHead = 0;
+        // Insertar este SEQ como el primero
+        dev->seqWindow[0] = seq;
+        dev->seqWindowCount = 1;
+        dev->seqWindowHead = 1;
         return false;
     }
+
+    // Buscar en la ventana
+    uint8_t count = dev->seqWindowCount;
+    for (uint8_t i = 0; i < count; i++) {
+        if (dev->seqWindow[i] == seq) return true;  // DUPLICADO
+    }
+
+    // No encontrado → nuevo, insertar en ventana circular
+    dev->seqWindow[dev->seqWindowHead] = seq;
+    dev->seqWindowHead = (dev->seqWindowHead + 1) % IOT_DEDUP_WINDOW;
+    if (dev->seqWindowCount < IOT_DEDUP_WINDOW) dev->seqWindowCount++;
+
     return false;
 }
 
 // ============================================================
-// Tabla de remotos
+// Tabla de remotos — Registry ampliado (Fix V4.1.1)
 // ============================================================
 
 void IoTNode::_updateRemote(uint8_t srcId, IPAddress ip, uint16_t port,
                             uint16_t bootId, uint32_t seq) {
+    // Buscar existente
     for (int i = 0; i < IOT_MAX_REMOTES; i++) {
         if (_remotes[i].active && _remotes[i].id == srcId) {
             _remotes[i].ip = ip;
             _remotes[i].port = port;
-            _remotes[i].lastBootId = bootId;
-            _remotes[i].lastSeq = seq;
             _remotes[i].lastSeen = millis();
+            _remotes[i].state = DeviceState::ONLINE;
             return;
         }
     }
+    // Slot libre → crear nuevo
     for (int i = 0; i < IOT_MAX_REMOTES; i++) {
         if (!_remotes[i].active) {
-            _remotes[i] = { srcId, ip, port, bootId, seq, millis(), true };
+            memset(&_remotes[i], 0, sizeof(RemoteDevice));
+            _remotes[i].id = srcId;
+            _remotes[i].ip = ip;
+            _remotes[i].port = port;
+            _remotes[i].bootId = bootId;
+            _remotes[i].seqWindowCount = 0;
+            _remotes[i].seqWindowHead = 0;
+            _remotes[i].lastSeen = millis();
+            _remotes[i].state = DeviceState::ONLINE;
+            _remotes[i].active = true;
             return;
         }
     }
+    // Tabla llena: reciclar el más viejo
     int oldest = 0;
     for (int i = 1; i < IOT_MAX_REMOTES; i++) {
         if (_remotes[i].lastSeen < _remotes[oldest].lastSeen) oldest = i;
     }
-    _remotes[oldest] = { srcId, ip, port, bootId, seq, millis(), true };
+    memset(&_remotes[oldest], 0, sizeof(RemoteDevice));
+    _remotes[oldest].id = srcId;
+    _remotes[oldest].ip = ip;
+    _remotes[oldest].port = port;
+    _remotes[oldest].bootId = bootId;
+    _remotes[oldest].lastSeen = millis();
+    _remotes[oldest].state = DeviceState::ONLINE;
+    _remotes[oldest].active = true;
+}
+
+void IoTNode::_fillRemoteFromHello(RemoteDevice &dev, const IoTPacket &pkt) {
+    uint8_t devType = 0;
+    if (pkt.getTLV_uint8(TlvTag::DEVICE_TYPE_TAG, devType)) {
+        dev.deviceType = static_cast<DeviceType>(devType);
+    }
+    pkt.getTLV_string(TlvTag::DEVICE_NAME, dev.name, sizeof(dev.name));
+    pkt.getTLV_string(TlvTag::FW_VERSION, dev.fwVersion, sizeof(dev.fwVersion));
 }
 
 void IoTNode::registerRemote(uint8_t id, IPAddress ip, uint16_t port) {
@@ -348,6 +414,40 @@ RemoteDevice* IoTNode::getRemote(uint8_t id) {
         if (_remotes[i].active && _remotes[i].id == id) return &_remotes[i];
     }
     return nullptr;
+}
+
+uint8_t IoTNode::getRemoteCount() const {
+    uint8_t count = 0;
+    for (int i = 0; i < IOT_MAX_REMOTES; i++) {
+        if (_remotes[i].active) count++;
+    }
+    return count;
+}
+
+// ============================================================
+// ONLINE / STALE / OFFLINE state machine (Fix V4.1.1)
+// ============================================================
+
+void IoTNode::_updateDeviceStates() {
+    unsigned long ahora = millis();
+    for (int i = 0; i < IOT_MAX_REMOTES; i++) {
+        if (!_remotes[i].active) continue;
+        unsigned long elapsed = ahora - _remotes[i].lastSeen;
+
+        DeviceState newState;
+        if (elapsed < IOT_STALE_TIMEOUT_MS) {
+            newState = DeviceState::ONLINE;
+        } else if (elapsed < IOT_OFFLINE_TIMEOUT_MS) {
+            newState = DeviceState::STALE;
+        } else {
+            newState = DeviceState::OFFLINE;
+        }
+        _remotes[i].state = newState;
+    }
+}
+
+void IoTNode::updateDeviceStates() {
+    _updateDeviceStates();
 }
 
 // ============================================================
@@ -401,23 +501,19 @@ void IoTNode::sendHello(IPAddress destIP, uint16_t destPort,
     pkt.clearPayload();
     pkt.addTLV_uint8(TlvTag::DEVICE_TYPE_TAG, static_cast<uint8_t>(devType));
     pkt.addTLV_string(TlvTag::DEVICE_NAME, devName);
-    pkt.addTLV_string(TlvTag::FW_VERSION, "4.1.0");
+    pkt.addTLV_string(TlvTag::FW_VERSION, "4.1.1");
     pkt.addTLV_uint16(TlvTag::BOOT_ID_TAG, _bootId);
 
     enqueue(pkt, destIP, destPort);
 }
 
 // ============================================================
-// Callback
+// Callback + sendEvent
 // ============================================================
 
 void IoTNode::onPacketReceived(IoTPacketHandler handler) {
     _handler = handler;
 }
-
-// ============================================================
-// API: sendEvent (high-level)
-// ============================================================
 
 bool IoTNode::sendEvent(EventCode event, IPAddress destIP, uint16_t destPort, uint8_t destId) {
     IoTPacket pkt;

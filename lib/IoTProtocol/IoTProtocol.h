@@ -136,10 +136,12 @@ enum class TlvTag : uint8_t {
     CMD_STATE       = 0x30,   // uint8_t: 0=OFF, 1=ON, 2=TOGGLE
     CMD_DURATION    = 0x31,   // uint16_t: ms
     CMD_CHANNEL     = 0x32,   // uint8_t: canal (0–7)
+    CMD_ID          = 0x33,   // uint32_t: ID lógico del comando (para RESPONSE matching)
 
     // === Respuesta (0x40–0x4F) ===
-    RESULT_CODE     = 0x40,   // uint8_t: 0=OK, 1=FAIL, 2=BUSY, 3=NOT_SUPPORTED
+    RESULT_CODE     = 0x40,   // uint8_t: ResultCode enum
     RESULT_STATE    = 0x41,   // uint8_t: estado actual tras ejecutar
+    RESULT_CMD_ID   = 0x42,   // uint32_t: CMD_ID al que responde
 
     // === Display (0x50–0x5F) ===
     DISPLAY_LINE    = 0x50,   // uint8_t: línea (0–3)
@@ -224,6 +226,20 @@ enum class IoTError : uint8_t {
     ERR_AUTH_FAILED     = 0x09,
     ERR_BUSY            = 0x0A,
     ERR_TIMEOUT         = 0x0B,
+};
+
+// ============================================================
+// Códigos de resultado para RESPONSE (respuesta a COMMAND)
+// ============================================================
+
+enum class ResultCode : uint8_t {
+    OK                  = 0x00,   // Comando ejecutado exitosamente
+    FAIL                = 0x01,   // Falló la ejecución
+    BUSY                = 0x02,   // Dispositivo ocupado, reintentar después
+    NOT_SUPPORTED       = 0x03,   // Comando no soportado por este dispositivo
+    INVALID_VALUE       = 0x04,   // Valor del comando fuera de rango
+    TIMEOUT             = 0x05,   // Actuador no respondió a tiempo
+    REJECTED            = 0x06,   // Rechazado por política (ej: modo seguro)
 };
 
 // ============================================================

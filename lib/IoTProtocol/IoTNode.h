@@ -28,11 +28,14 @@
 #define IOT_QUEUE_SIZE        8     // Capacidad de la cola FIFO
 #define IOT_MAX_REMOTES       8     // Tabla de dispositivos remotos
 #define IOT_MAX_RETRIES       5     // Reintentos para reliable
+#define IOT_DEDUP_WINDOW      8     // Ventana de deduplicación (últimos N SEQ por remoto)
 
 // Timeouts (ms)
 #define IOT_ACK_TIMEOUT_BASE    300
 #define IOT_ACK_TIMEOUT_MAX     2000
 #define IOT_HEARTBEAT_INTERVAL  60000   // 60s default
+#define IOT_STALE_TIMEOUT_MS    90000   // 90s sin paquete → STALE
+#define IOT_OFFLINE_TIMEOUT_MS  180000  // 180s sin paquete → OFFLINE
 
 // ============================================================
 // Política de overflow de cola
@@ -51,7 +54,18 @@ enum class QueueOverflow : uint8_t {
 typedef void (*IoTPacketHandler)(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePort);
 
 // ============================================================
-// Dispositivo remoto conocido (para deduplicación y registry)
+// Estado de conexión de un dispositivo remoto
+// ============================================================
+
+enum class DeviceState : uint8_t {
+    UNKNOWN     = 0,
+    ONLINE      = 1,   // Último paquete < 90s
+    STALE       = 2,   // Último paquete 90–180s
+    OFFLINE     = 3,   // Último paquete > 180s
+};
+
+// ============================================================
+// Dispositivo remoto conocido (registry + deduplicación)
 // ============================================================
 
 struct RemoteDevice {
@@ -59,13 +73,22 @@ struct RemoteDevice {
     IPAddress ip;
     uint16_t  port;
 
-    // Deduplicación (con BOOT_ID)
-    uint16_t  lastBootId;
-    uint32_t  lastSeq;
+    // Deduplicación: ventana de últimos N SEQ procesados
+    uint16_t  bootId;
+    uint32_t  seqWindow[IOT_DEDUP_WINDOW];
+    uint8_t   seqWindowCount;   // Cuántos hay en la ventana (0–IOT_DEDUP_WINDOW)
+    uint8_t   seqWindowHead;    // Índice circular para insertar el siguiente
 
-    // Estado
+    // Registry (se llena con HELLO)
+    DeviceType deviceType;
+    char       name[20];
+    char       fwVersion[12];
+
+    // Estado de vida
     unsigned long lastSeen;       // millis() del último paquete recibido
-    bool      active;
+    unsigned long lastHeartbeat;  // millis() del último HEARTBEAT
+    DeviceState   state;
+    bool          active;         // Slot en uso
 };
 
 // ============================================================
@@ -155,6 +178,8 @@ public:
     // --- Remotos ---
     RemoteDevice* getRemote(uint8_t id);
     void registerRemote(uint8_t id, IPAddress ip, uint16_t port);
+    uint8_t getRemoteCount() const;
+    void updateDeviceStates();  // Llamar periódicamente para ONLINE→STALE→OFFLINE
 
 private:
     uint8_t  _deviceId;
@@ -181,6 +206,9 @@ private:
     unsigned long _hbInterval;
     unsigned long _lastHb;
 
+    // Device state tracking
+    unsigned long _lastStateCheck;
+
     // Callback
     IoTPacketHandler _handler;
 
@@ -192,10 +220,12 @@ private:
     void _processQueue();
     void _processReliable();
     void _sendHeartbeat();
+    void _updateDeviceStates();
     void _handleAck(const IoTPacket &pkt);
     void _sendAutoAck(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePort);
     bool _isDuplicate(uint8_t srcId, uint16_t bootId, uint32_t seq);
     void _updateRemote(uint8_t srcId, IPAddress ip, uint16_t port, uint16_t bootId, uint32_t seq);
+    void _fillRemoteFromHello(RemoteDevice &dev, const IoTPacket &pkt);
     void _transmitPacket(const IoTPacket &pkt, IPAddress destIP, uint16_t destPort);
     int  _findHighestPriorityEntry() const;
     int  _findLowestPriorityEntry() const;

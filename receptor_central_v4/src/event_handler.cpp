@@ -124,6 +124,15 @@ void handleIoTPacket(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePo
             LOG_INFO("HELLO 0x%02X: \"%s\" type=%d boot=0x%04X (%s)",
                      pkt.src, name, devType, pkt.bootId,
                      remoteIP.toString().c_str());
+
+            // Publicar discovery en MQTT
+            if (mqttDisponible) {
+                char topic[48], payload[40];
+                snprintf(topic, sizeof(topic), "casa/iot/device_%02X/name", pkt.src);
+                mqtt.publish(topic, name, true);
+                snprintf(topic, sizeof(topic), "casa/iot/device_%02X/status", pkt.src);
+                mqtt.publish(topic, "online", true);
+            }
             break;
         }
 
