@@ -13,7 +13,7 @@ extern String modoActual;
 WiFiClient espClient;
 PubSubClient mqtt(espClient);
 bool haDisponible = false;
-ModoConexion modoConexion = ModoConexion::LOCAL;  // Arranca en LOCAL hasta detectar broker
+ModoConexion modoConexion = ModoConexion::MODO_LOCAL;  // Arranca en LOCAL hasta detectar broker
 
 // --- Timers ---
 static unsigned long ultimoIntentoMQTT = 0;
@@ -29,10 +29,9 @@ static const unsigned long INTERVALO_SONDEO_BROKER = 300000;  // 5 minutos
 // --- Estado del intento de conexión bloqueante ---
 // Usamos un flag para que el sondeo bloqueante ocurra máximo UNA vez
 // por ciclo de sondeo, y nunca durante una alarma activa.
-static bool sondeoEnCurso = false;
 
 const char* modoConexionStr() {
-    return (modoConexion == ModoConexion::INTELIGENTE) ? "INTELIGENTE" : "LOCAL";
+    return (modoConexion == ModoConexion::MODO_HA) ? "INTELIGENTE" : "LOCAL";
 }
 
 static void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -99,15 +98,15 @@ void inicializarMQTT() {
     if (wifiConectado()) {
         LOG_INFO("Boot: probando broker MQTT...");
         if (intentarConexionMQTT()) {
-            modoConexion = ModoConexion::INTELIGENTE;
+            modoConexion = ModoConexion::MODO_HA;
             transitionTo(SystemState::READY);
             LOG_INFO(">>> Modo INTELIGENTE (Home Assistant) <<<");
         } else {
-            modoConexion = ModoConexion::LOCAL;
+            modoConexion = ModoConexion::MODO_LOCAL;
             LOG_INFO(">>> Modo LOCAL (broker no disponible) <<<");
         }
     } else {
-        modoConexion = ModoConexion::LOCAL;
+        modoConexion = ModoConexion::MODO_LOCAL;
         LOG_INFO(">>> Modo LOCAL (sin WiFi al boot) <<<");
     }
     ultimoSondeo = millis();
@@ -124,14 +123,14 @@ void manejarMQTT() {
     // Solo sondea cada 5 minutos para ver si el broker volvió.
     // El sondeo SOLO ocurre si la bocina NO está sonando.
     // ==========================================
-    if (modoConexion == ModoConexion::LOCAL) {
+    if (modoConexion == ModoConexion::MODO_LOCAL) {
         unsigned long ahora = millis();
         if (ahora - ultimoSondeo >= INTERVALO_SONDEO_BROKER) {
             ultimoSondeo = ahora;
             if (!buzzer.isOn()) {
                 LOG_INFO("Sondeo: verificando si broker MQTT volvio...");
                 if (intentarConexionMQTT()) {
-                    modoConexion = ModoConexion::INTELIGENTE;
+                    modoConexion = ModoConexion::MODO_HA;
                     LOG_INFO(">>> Broker detectado! Cambiando a modo INTELIGENTE <<<");
                     transitionTo(SystemState::READY);
                 } else {
@@ -171,7 +170,7 @@ void manejarMQTT() {
                 fallosDesdeInteligente++;
                 if (fallosDesdeInteligente >= 3) {
                     LOG_WARN("Broker caido, volviendo a modo LOCAL");
-                    modoConexion = ModoConexion::LOCAL;
+                    modoConexion = ModoConexion::MODO_LOCAL;
                     ultimoSondeo = millis();
                     fallosDesdeInteligente = 0;
                     transitionTo(SystemState::READY);
