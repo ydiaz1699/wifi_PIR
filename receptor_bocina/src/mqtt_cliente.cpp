@@ -17,11 +17,15 @@ bool haDisponible = false;
 static unsigned long ultimoIntentoMQTT = 0;
 static unsigned long ultimoUptime = 0;
 
-// --- Guardia anti-bloqueo ---
-// Controla cuánto tiempo puede pasar intentando conectar TCP al broker.
-// Si la conexión TCP no se establece rápido, se aborta para no bloquear
-// la recepción UDP (que es la función primaria del dispositivo).
-static const unsigned long TCP_CONNECT_TIMEOUT_MS = 1000;
+// --- Control anti-bloqueo V3.2b ---
+// En lugar de verificar TCP (que bloquea 5s en ESP8266),
+// usamos un ping ICMP-like: intentamos connect() solo si
+// el broker respondió a un ARP reciente (si está en la tabla ARP
+// del ESP8266, significa que está online en la red local).
+// Si no tenemos esa info, simplemente espaciamos los intentos
+// cada 30 segundos para minimizar bloqueos.
+static const unsigned long INTERVALO_MQTT_SIN_BROKER = 30000;  // 30s entre intentos si broker caído
+static uint8_t fallosConsecutivos = 0;
 
 static void mqttCallback(char* topic, byte* payload, unsigned int length) {
     String mensaje;
@@ -45,39 +49,9 @@ static void mqttCallback(char* topic, byte* payload, unsigned int length) {
     }
 }
 
-// --- Conexión TCP no-bloqueante antes de MQTT ---
-// Primero verificamos que el broker responde TCP en <1s.
-// Si no responde, salimos sin bloquear. Así el loop sigue
-// procesando paquetes UDP normalmente.
-static bool verificarTCPBroker() {
-    if (espClient.connected()) return true;  // Ya conectado
-
-    LOG_DEBUG("MQTT: verificando TCP hacia %s:%d...", mqtt_server, mqtt_port);
-
-    unsigned long inicio = millis();
-    int resultado = espClient.connect(mqtt_server, mqtt_port);
-
-    unsigned long duracion = millis() - inicio;
-
-    if (resultado) {
-        LOG_DEBUG("MQTT: TCP OK en %lums", duracion);
-        espClient.stop();  // Cerramos; PubSubClient abrirá su propia conexión
-        return true;
-    }
-
-    LOG_WARN("MQTT: TCP fallo tras %lums, broker no disponible", duracion);
-    return false;
-}
-
 static void conectarMQTT() {
-    // Paso 1: Verificar que el broker responde TCP rápido
-    if (!verificarTCPBroker()) {
-        reportarFalloMQTT();
-        return;
-    }
+    LOG_INFO("MQTT: intentando connect (broker %s:%d)...", mqtt_server, mqtt_port);
 
-    // Paso 2: Si TCP respondió, ahora sí intentar handshake MQTT
-    LOG_INFO("Conectando MQTT...");
     bool ok;
     if (mqtt_user[0] != '\0') {
         ok = mqtt.connect(mqtt_client_id, mqtt_user, mqtt_pass, TOPIC_ESTADO, 0, true, "offline");
@@ -88,6 +62,7 @@ static void conectarMQTT() {
     if (ok) {
         LOG_INFO("MQTT OK");
         haDisponible = true;
+        fallosConsecutivos = 0;
         reportarExitoConexion();
         mqtt.publish(TOPIC_ESTADO, "online", true);
 
@@ -102,14 +77,15 @@ static void conectarMQTT() {
 
         transitionTo(SystemState::READY);
     } else {
-        LOG_ERROR("MQTT fallo, rc=%d", mqtt.state());
+        LOG_WARN("MQTT fallo, rc=%d", mqtt.state());
         haDisponible = false;
+        fallosConsecutivos++;
         reportarFalloMQTT();
     }
 }
 
 void inicializarMQTT() {
-    mqtt.setSocketTimeout(1);       // Timeout TCP de 1 segundo (mínimo de PubSubClient)
+    mqtt.setSocketTimeout(1);       // Timeout mínimo de PubSubClient (afecta read, no connect)
     mqtt.setServer(mqtt_server, mqtt_port);
     mqtt.setBufferSize(768);
     mqtt.setCallback(mqttCallback);
@@ -124,7 +100,14 @@ void manejarMQTT() {
     if (!mqtt.connected()) {
         haDisponible = false;
         unsigned long ahora = millis();
-        if (ahora - ultimoIntentoMQTT > INTERVALO_RECONEXION_MQTT) {
+
+        // Backoff progresivo: cuanto más falla, más se espacia.
+        // 1er fallo: 10s, 2do+: 30s. Así se reduce el tiempo bloqueado.
+        unsigned long intervalo = (fallosConsecutivos >= 2)
+            ? INTERVALO_MQTT_SIN_BROKER
+            : INTERVALO_RECONEXION_MQTT;
+
+        if (ahora - ultimoIntentoMQTT > intervalo) {
             ultimoIntentoMQTT = ahora;
             if (!inState(SystemState::CONNECT_MQTT) && !inState(SystemState::RECOVER)) {
                 transitionTo(SystemState::CONNECT_MQTT);

@@ -47,22 +47,19 @@ void loop() {
     manejarAlarma();
 
     // ============================================================
-    // PRIORIDAD #2: MQTT (solo si WiFi conectado Y no en alarma activa)
-    // Si la bocina está sonando, no intentar reconexión MQTT porque
-    // connect() puede bloquear ~1s y perderíamos paquetes UDP de
-    // un segundo evento que llegue inmediatamente después.
+    // PRIORIDAD #2: MQTT
+    // - Si ya está conectado: mqtt.loop() es instantáneo, siempre corre.
+    // - Si NO está conectado: connect() bloquea ~5s en ESP8266 cuando
+    //   el broker no responde. Solo permitimos ese intento si:
+    //   (a) la bocina NO está sonando (no perder eventos durante alarma)
+    //   (b) manejarMQTT() internamente controla el backoff (10s/30s)
     // ============================================================
     if (wifiConectado()) {
         if (mqtt.connected()) {
-            // Ya conectado: solo hacer loop() que es no-bloqueante
-            manejarMQTT();
+            manejarMQTT();  // mqtt.loop() — instantáneo
         } else if (!buzzer.isOn()) {
-            // Desconectado y sin alarma activa: intentar reconectar
-            // (con la guardia TCP anti-bloqueo en mqtt_cliente.cpp)
-            manejarMQTT();
+            manejarMQTT();  // puede bloquear ~5s, pero solo cada 10-30s
         }
-        // Si desconectado Y buzzer activo: no intentar reconexión,
-        // se reintentará cuando la bocina se apague.
     }
 
     // --- Publicar cambios de estado de la bocina ---
