@@ -1,14 +1,20 @@
 /**
- * Emisor PIR + Timbre V3.4
+ * Emisor PIR + Timbre V3.5
  *
- * Diseño: FIRE-AND-FORGET con redundancia
+ * Diseño: ACK ASÍNCRONO NO-BLOQUEANTE
  *
- * - PIR y TIMBRE son completamente INDEPENDIENTES
- * - No hay máquina de estados TX ni espera de ACK
- * - Cada evento se envía 3 veces inmediatamente (redundancia anti-pérdida)
- * - El receptor se encarga de deduplicar (ya lo hace con eventId)
- * - Latencia: <1ms entre detección y envío
- * - Nunca se bloquea, nunca se "espera", nunca se descarta un evento
+ * - PIR y TIMBRE envían INMEDIATAMENTE al detectarse (nunca esperan)
+ * - Cola de hasta 4 eventos "pendientes de ACK"
+ * - Los ACKs se verifican en background (sin bloquear detección)
+ * - Si un evento no recibe ACK en 500ms, se reenvía automáticamente
+ * - Máximo 3 reintentos por evento, después se marca como fallido
+ * - Múltiples eventos pueden estar en vuelo SIMULTÁNEAMENTE
+ *
+ * Resultado:
+ * - PIR y TIMBRE son 100% independientes
+ * - Se confirma que el receptor recibió cada evento
+ * - Si se pierde un paquete, se reintenta sin afectar otros eventos
+ * - Latencia de envío: <1ms (instantáneo)
  */
 
 #include <ESP8266WiFi.h>
@@ -19,26 +25,44 @@
 #include "logger.h"
 
 WiFiUDP udp;
+char bufferRX[32];
 
 // --- Pines ---
 const int pinPIR = D2;
-const int pinTimbre = D3;   // INPUT_PULLUP, activo en LOW
+const int pinTimbre = D3;
 
 // --- Timings ---
 const unsigned long ANTIREBOTE_PIR_MS = 500;
 const unsigned long ANTIREBOTE_TIMBRE_MS = 500;
 const unsigned long WIFI_RETRY_MS = 5000;
-const int ENVIOS_REDUNDANTES = 3;     // Enviar cada evento 3 veces (anti-pérdida)
-const int DELAY_ENTRE_ENVIOS_US = 500; // 500 microsegundos entre envíos redundantes
+const unsigned long ACK_TIMEOUT_MS = 500;     // Timeout para reenvío
+const int MAX_REINTENTOS = 3;                 // Reintentos por evento
 
 const char* DEVICE_ID = "PIR01";
+
+// ============================================================
+// Cola de eventos en vuelo (pendientes de ACK)
+// Múltiples eventos pueden estar en vuelo simultáneamente
+// ============================================================
+
+#define MAX_EN_VUELO 4
+
+struct EventoEnVuelo {
+    uint32_t eventId;
+    char mensaje[32];
+    unsigned long enviadoEn;     // millis() del último envío
+    uint8_t intentos;            // Envíos realizados
+    bool activo;                 // Slot en uso
+    bool confirmado;             // ACK recibido
+};
+
+EventoEnVuelo enVuelo[MAX_EN_VUELO];
 
 // --- Estado ---
 unsigned long ultimaDeteccionPIR = 0;
 unsigned long ultimaDeteccionTimbre = 0;
 bool pirAnterior = LOW;
 bool timbreAnterior = HIGH;
-
 uint32_t eventCounter = 0;
 
 unsigned long ultimoIntentoWiFi = 0;
@@ -75,10 +99,18 @@ void manejarWiFi() {
 }
 
 // ============================================================
-// Envío INMEDIATO — fire-and-forget con redundancia
+// Envío UDP (no bloquea)
 // ============================================================
 
-static const char* tipoToStr(const char* tipo) { return tipo; }
+static void enviarUDP(const char* msg) {
+    udp.beginPacket(destino_IP, PUERTO_UDP);
+    udp.write(msg);
+    udp.endPacket();
+}
+
+// ============================================================
+// Enviar evento INMEDIATAMENTE + registrar en cola de vuelo
+// ============================================================
 
 void enviarEvento(const char* tipo) {
     if (WiFi.status() != WL_CONNECTED) {
@@ -87,21 +119,91 @@ void enviarEvento(const char* tipo) {
     }
 
     eventCounter++;
+
+    // Armar mensaje
     char msg[32];
     snprintf(msg, sizeof(msg), "%s|%lu|%s", DEVICE_ID, (unsigned long)eventCounter, tipo);
 
-    // Enviar N veces con micro-delay entre cada uno
-    // El receptor deduplica por eventId, así que solo procesa 1
-    for (int i = 0; i < ENVIOS_REDUNDANTES; i++) {
-        udp.beginPacket(destino_IP, PUERTO_UDP);
-        udp.write(msg);
-        udp.endPacket();
-        if (i < ENVIOS_REDUNDANTES - 1) {
-            delayMicroseconds(DELAY_ENTRE_ENVIOS_US);
+    // Enviar inmediatamente (no esperar nada)
+    enviarUDP(msg);
+    LOG_INFO("Enviado: %s", msg);
+
+    // Buscar slot libre en la cola de vuelo
+    for (int i = 0; i < MAX_EN_VUELO; i++) {
+        if (!enVuelo[i].activo) {
+            enVuelo[i].eventId = eventCounter;
+            strncpy(enVuelo[i].mensaje, msg, sizeof(enVuelo[i].mensaje));
+            enVuelo[i].enviadoEn = millis();
+            enVuelo[i].intentos = 1;
+            enVuelo[i].activo = true;
+            enVuelo[i].confirmado = false;
+            return;
         }
     }
 
-    LOG_INFO("Enviado %dx: %s", ENVIOS_REDUNDANTES, msg);
+    // Cola llena — el evento se envió pero no se trackea (fire-and-forget fallback)
+    LOG_WARN("Cola de ACK llena, evento %lu sin tracking", (unsigned long)eventCounter);
+}
+
+// ============================================================
+// Verificar ACKs recibidos (no-bloqueante)
+// ============================================================
+
+void verificarACKs() {
+    // Leer todos los paquetes UDP disponibles
+    while (true) {
+        int packetSize = udp.parsePacket();
+        if (!packetSize) break;
+
+        int len = udp.read(bufferRX, sizeof(bufferRX) - 1);
+        if (len <= 0) continue;
+        bufferRX[len] = 0;
+
+        // Parsear ACK: "OK|eventId"
+        char* sep = strchr(bufferRX, '|');
+        if (sep && strncmp(bufferRX, "OK", 2) == 0) {
+            uint32_t ackId = strtoul(sep + 1, nullptr, 10);
+
+            // Buscar en cola y marcar como confirmado
+            for (int i = 0; i < MAX_EN_VUELO; i++) {
+                if (enVuelo[i].activo && enVuelo[i].eventId == ackId) {
+                    enVuelo[i].confirmado = true;
+                    enVuelo[i].activo = false;
+                    LOG_INFO("ACK recibido: evento %lu", (unsigned long)ackId);
+                    break;
+                }
+            }
+        }
+    }
+}
+
+// ============================================================
+// Reenviar eventos sin ACK (no-bloqueante)
+// ============================================================
+
+void reenviarPendientes() {
+    unsigned long ahora = millis();
+
+    for (int i = 0; i < MAX_EN_VUELO; i++) {
+        if (!enVuelo[i].activo) continue;
+
+        // ¿Pasó el timeout sin ACK?
+        if (ahora - enVuelo[i].enviadoEn >= ACK_TIMEOUT_MS) {
+            if (enVuelo[i].intentos >= MAX_REINTENTOS) {
+                // Fallo definitivo
+                LOG_ERROR("Evento %lu: sin ACK tras %d intentos",
+                          (unsigned long)enVuelo[i].eventId, MAX_REINTENTOS);
+                enVuelo[i].activo = false;
+            } else {
+                // Reenviar
+                enVuelo[i].intentos++;
+                enVuelo[i].enviadoEn = ahora;
+                enviarUDP(enVuelo[i].mensaje);
+                LOG_INFO("Reenvio: %s (intento %d/%d)",
+                         enVuelo[i].mensaje, enVuelo[i].intentos, MAX_REINTENTOS);
+            }
+        }
+    }
 }
 
 // ============================================================
@@ -111,23 +213,35 @@ void enviarEvento(const char* tipo) {
 void setup() {
     Serial.begin(115200);
     delay(100);
-    LOG_INFO("===== Boot Emisor PIR+Timbre v3.4 (fire-and-forget) =====");
+    LOG_INFO("===== Boot Emisor PIR+Timbre v3.5 (async ACK) =====");
     ESP.wdtEnable(8000);
     pinMode(pinPIR, INPUT);
     pinMode(pinTimbre, INPUT_PULLUP);
+
+    // Inicializar cola
+    for (int i = 0; i < MAX_EN_VUELO; i++) {
+        enVuelo[i].activo = false;
+    }
+
     iniciarWiFi();
     udp.begin(PUERTO_UDP);
 }
 
 // ============================================================
-// LOOP — Ultra simple, sin máquina de estados
+// LOOP — Todo es no-bloqueante
 // ============================================================
 
 void loop() {
     ESP.wdtFeed();
     manejarWiFi();
 
-    // --- PIR: flanco de subida ---
+    // 1. Verificar ACKs recibidos (instantáneo, no bloquea)
+    verificarACKs();
+
+    // 2. Reenviar eventos sin ACK (solo si pasó timeout)
+    reenviarPendientes();
+
+    // 3. PIR: flanco de subida — envío INMEDIATO
     bool pirActual = digitalRead(pinPIR) == HIGH;
     if (pirActual && !pirAnterior) {
         unsigned long ahora = millis();
@@ -139,7 +253,7 @@ void loop() {
     }
     pirAnterior = pirActual;
 
-    // --- Timbre: flanco de bajada (pull-up, activo LOW) ---
+    // 4. Timbre: flanco de bajada — envío INMEDIATO
     bool timbreActual = digitalRead(pinTimbre) == LOW;
     if (timbreActual && !timbreAnterior) {
         unsigned long ahora = millis();
