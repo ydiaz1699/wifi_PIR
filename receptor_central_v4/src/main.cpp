@@ -80,7 +80,7 @@ static void setupOTA() {
 void setup() {
     Serial.begin(115200);
     delay(100);
-    LOG_INFO("===== Central IoT V4.1 =====");
+    LOG_INFO("===== Central IoT V4.2 =====");
 
     ESP.wdtEnable(8000);
 
@@ -111,6 +111,22 @@ void setup() {
 
     LOG_INFO("Modo MQTT: %s | Alarma: %s", modoMQTTStr(), modoAlarma.c_str());
     LOG_INFO("Setup completo — esperando eventos...");
+
+    // Pedir estado actual a todos los nodos (STATE_SYNC al boot)
+    // Así si la central reinició, reconstruye el estado de la red
+    {
+        IoTPacket req;
+        req.version = IOT_PROTOCOL_VER;
+        req.type = MsgType::STATE_REQUEST;
+        req.src = MY_DEVICE_ID;
+        req.dst = IOT_DEVICE_BROADCAST;
+        req.bootId = node.getBootId();
+        req.seq = node.getNextSeq();
+        req.flags = 0;  // No requiere ACK (broadcast)
+        req.clearPayload();
+        node.sendDirect(req, IPAddress(192, 168, 0, 255), IOT_UDP_PORT);
+        LOG_INFO("STATE_REQUEST broadcast enviado");
+    }
 }
 
 // ============================================================

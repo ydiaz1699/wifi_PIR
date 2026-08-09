@@ -60,10 +60,44 @@ static void manejarWiFi() {
 }
 
 // --- Callback para paquetes recibidos (comandos de la central) ---
+static void sendStateReport(IPAddress destIP, uint16_t destPort) {
+    IoTPacket pkt;
+    pkt.version = IOT_PROTOCOL_VER;
+    pkt.type = MsgType::STATE_REPORT;
+    pkt.src = MY_DEVICE_ID;
+    pkt.dst = IOT_DEVICE_CENTRAL;
+    pkt.bootId = node.getBootId();
+    pkt.seq = node.getNextSeq();
+    pkt.flags = 0;  // Fire-and-forget (la central lo pidió, no necesita ACK)
+    pkt.clearPayload();
+
+    // Estado actual de los sensores
+    pkt.addTLV_uint8(TlvTag::STATE_MOTION, pirAnterior ? 1 : 0);
+    pkt.addTLV_uint8(TlvTag::STATE_BUTTON, timbreAnterior == LOW ? 1 : 0);
+
+    // Telemetría
+    pkt.addTLV_uint32(TlvTag::UPTIME_SEC, millis() / 1000);
+    pkt.addTLV_int8(TlvTag::RSSI_VAL, (int8_t)WiFi.RSSI());
+    pkt.addTLV_uint32(TlvTag::FREE_HEAP, ESP.getFreeHeap());
+
+    // Stats resumidas
+    const IoTStats& stats = node.getStats();
+    pkt.addTLV_uint32(TlvTag::TX_COUNT, stats.txPackets);
+    pkt.addTLV_uint32(TlvTag::ACK_TIMEOUTS, stats.ackTimeouts);
+
+    node.sendDirect(pkt, destIP, destPort);
+    LOG_INFO("STATE_REPORT enviado");
+}
+
 static void onPacketReceived(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePort) {
     switch (pkt.type) {
         case MsgType::HELLO_ACK:
             LOG_INFO("Central respondio HELLO_ACK — registrado");
+            break;
+
+        case MsgType::STATE_REQUEST:
+            LOG_INFO("STATE_REQUEST recibido — respondiendo");
+            sendStateReport(remoteIP, remotePort);
             break;
 
         case MsgType::COMMAND: {
@@ -87,7 +121,7 @@ static void onPacketReceived(const IoTPacket &pkt, IPAddress remoteIP, uint16_t 
 void setup() {
     Serial.begin(115200);
     delay(100);
-    LOG_INFO("===== Emisor IoT V4.1 [%s] ID=0x%02X =====", MY_DEVICE_NAME, MY_DEVICE_ID);
+    LOG_INFO("===== Emisor IoT V4.2 [%s] ID=0x%02X =====", MY_DEVICE_NAME, MY_DEVICE_ID);
 
     ESP.wdtEnable(8000);
     pinMode(PIN_PIR, INPUT);

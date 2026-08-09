@@ -25,6 +25,9 @@ IoTNode::IoTNode(uint8_t deviceId, uint16_t udpPort)
     memset(_queue, 0, sizeof(_queue));
     memset(_remotes, 0, sizeof(_remotes));
     memset(&_reliable, 0, sizeof(_reliable));
+    memset(&_stats, 0, sizeof(_stats));
+    memset(&_rtt, 0, sizeof(_rtt));
+    _rtt.minMs = 0xFFFFFFFF;  // Inicializar min alto
 }
 
 void IoTNode::begin() {
@@ -64,6 +67,7 @@ void IoTNode::_transmitPacket(const IoTPacket &pkt, IPAddress destIP, uint16_t d
         _udp.beginPacket(destIP, destPort);
         _udp.write(buf, len);
         _udp.endPacket();
+        _stats.txPackets++;
     }
 }
 
@@ -84,8 +88,10 @@ void IoTNode::_processReliable() {
 
     if (_reliable.waitingAck) {
         _reliable.attempt++;
+        _stats.retries++;
         if (_reliable.attempt >= _reliable.maxAttempts) {
             _reliable.active = false;
+            _stats.ackTimeouts++;
             return;
         }
     }
@@ -93,6 +99,7 @@ void IoTNode::_processReliable() {
     if (WiFi.status() == WL_CONNECTED) {
         _transmitPacket(_reliable.pkt, _reliable.destIP, _reliable.destPort);
         _reliable.waitingAck = true;
+        _reliable.sentAt = ahora;
         _reliable.nextRetryAt = ahora + _calcBackoff(_reliable.attempt);
     } else {
         _reliable.nextRetryAt = ahora + 1000;
@@ -128,8 +135,10 @@ void IoTNode::_processQueue() {
         _reliable.attempt = 0;
         _reliable.maxAttempts = IOT_MAX_RETRIES;
         _reliable.nextRetryAt = 0;
+        _reliable.sentAt = 0;
         _reliable.active = true;
         _reliable.waitingAck = false;
+        _stats.txReliable++;
     } else {
         if (WiFi.status() == WL_CONNECTED) {
             _transmitPacket(entry.pkt, entry.destIP, entry.destPort);
@@ -193,33 +202,37 @@ bool IoTNode::enqueue(IoTPacket &pkt, IPAddress destIP, uint16_t destPort) {
 
     switch (_overflowPolicy) {
         case QueueOverflow::DROP_NEWEST:
+            _stats.queueDrops++;
             return false;
         case QueueOverflow::DROP_OLDEST_BG: {
-            if (pri == Priority::BACKGROUND) return false;
+            if (pri == Priority::BACKGROUND) { _stats.queueDrops++; return false; }
             int victim = -1;
             for (int i = 0; i < IOT_QUEUE_SIZE; i++) {
                 if (_queue[i].occupied && _queue[i].priority == Priority::BACKGROUND) {
                     victim = i; break;
                 }
             }
-            if (victim < 0) return false;
+            if (victim < 0) { _stats.queueDrops++; return false; }
             _queue[victim].pkt = pkt;
             _queue[victim].destIP = destIP;
             _queue[victim].destPort = destPort;
             _queue[victim].priority = pri;
+            _stats.queueOverflows++;
             return true;
         }
         case QueueOverflow::DROP_OLDEST: {
             int victim = _findLowestPriorityEntry();
-            if (victim < 0) return false;
-            if (_queue[victim].priority < pri) return false;
+            if (victim < 0) { _stats.queueDrops++; return false; }
+            if (_queue[victim].priority < pri) { _stats.queueDrops++; return false; }
             _queue[victim].pkt = pkt;
             _queue[victim].destIP = destIP;
             _queue[victim].destPort = destPort;
             _queue[victim].priority = pri;
+            _stats.queueOverflows++;
             return true;
         }
     }
+    _stats.queueDrops++;
     return false;
 }
 
@@ -247,6 +260,8 @@ void IoTNode::_processIncoming() {
 
     if (pkt.dst != _deviceId && pkt.dst != IOT_DEVICE_BROADCAST) return;
 
+    _stats.rxPackets++;
+
     // Actualizar tabla de remotos (IP, port, lastSeen)
     _updateRemote(pkt.src, remoteIP, remotePort, pkt.bootId, pkt.seq);
 
@@ -266,6 +281,7 @@ void IoTNode::_processIncoming() {
     // Deduplicación con ventana (solo para reliable)
     if (pkt.isReliable() && _isDuplicate(pkt.src, pkt.bootId, pkt.seq)) {
         // ACK ya se envió arriba, pero NO volvemos a procesar el evento
+        _stats.duplicates++;
         return;
     }
 
@@ -302,6 +318,22 @@ void IoTNode::_handleAck(const IoTPacket &pkt) {
     if (!_reliable.active || !_reliable.waitingAck) return;
     if (pkt.seq == _reliable.pkt.seq && pkt.src == _reliable.pkt.dst) {
         _reliable.active = false;
+        _stats.ackReceived++;
+
+        // RTT measurement
+        if (_reliable.sentAt > 0) {
+            uint32_t rtt = (uint32_t)(millis() - _reliable.sentAt);
+            _rtt.lastMs = rtt;
+            _rtt.samples++;
+            if (rtt < _rtt.minMs) _rtt.minMs = rtt;
+            if (rtt > _rtt.maxMs) _rtt.maxMs = rtt;
+            // EMA (Exponential Moving Average): avg = avg*0.75 + sample*0.25
+            if (_rtt.samples == 1) {
+                _rtt.avgMs = rtt;
+            } else {
+                _rtt.avgMs = (_rtt.avgMs * 3 + rtt) / 4;
+            }
+        }
     }
 }
 
@@ -467,7 +499,11 @@ void IoTNode::disableHeartbeat() { _hbEnabled = false; }
 void IoTNode::_sendHeartbeat() {
     unsigned long ahora = millis();
     if (ahora - _lastHb < _hbInterval) return;
-    _lastHb = ahora;
+
+    // Jitter: ±5 seconds randomizado para distribuir tráfico
+    // cuando hay muchos dispositivos en la red
+    long jitter = random(-5000, 5000);
+    _lastHb = ahora + jitter;
 
     IoTPacket pkt;
     pkt.version = IOT_PROTOCOL_VER;
@@ -478,8 +514,14 @@ void IoTNode::_sendHeartbeat() {
     pkt.seq = getNextSeq();
     pkt.flags = IOT_FLAG_BACKGROUND;
     pkt.clearPayload();
+
+    // Telemetría enriquecida
     pkt.addTLV_uint32(TlvTag::UPTIME_SEC, millis() / 1000);
     pkt.addTLV_int8(TlvTag::RSSI_VAL, (int8_t)WiFi.RSSI());
+    pkt.addTLV_uint32(TlvTag::FREE_HEAP, ESP.getFreeHeap());
+    pkt.addTLV_uint8(TlvTag::QUEUE_DEPTH, _queueCount);
+    pkt.addTLV_uint32(TlvTag::TX_COUNT, _stats.txPackets);
+    pkt.addTLV_uint32(TlvTag::ACK_TIMEOUTS, _stats.ackTimeouts);
 
     sendDirect(pkt, _hbIP, _hbPort);
 }
@@ -530,4 +572,15 @@ bool IoTNode::sendEvent(EventCode event, IPAddress destIP, uint16_t destPort, ui
     pkt.addTLV_int8(TlvTag::RSSI_VAL, (int8_t)WiFi.RSSI());
 
     return enqueue(pkt, destIP, destPort);
+}
+
+
+// ============================================================
+// Estadísticas
+// ============================================================
+
+void IoTNode::resetStats() {
+    memset(&_stats, 0, sizeof(_stats));
+    memset(&_rtt, 0, sizeof(_rtt));
+    _rtt.minMs = 0xFFFFFFFF;
 }

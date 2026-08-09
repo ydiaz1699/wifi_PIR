@@ -65,9 +65,23 @@ static void publishEvent(uint8_t srcId, EventCode code, uint8_t value) {
     mqtt.publish(topic, payload);
 }
 
-static void publishHeartbeat(uint8_t srcId, uint32_t uptime, int8_t rssi) {
+static void publishHeartbeat(uint8_t srcId, const IoTPacket &pkt) {
     if (!mqttDisponible) return;
     char topic[48], payload[16];
+
+    uint32_t uptime = 0;
+    int8_t rssi = 0;
+    uint32_t freeHeap = 0;
+    uint8_t queueDepth = 0;
+    uint32_t txCount = 0;
+    uint32_t ackTimeouts = 0;
+
+    pkt.getTLV_uint32(TlvTag::UPTIME_SEC, uptime);
+    pkt.getTLV_int8(TlvTag::RSSI_VAL, rssi);
+    pkt.getTLV_uint32(TlvTag::FREE_HEAP, freeHeap);
+    pkt.getTLV_uint8(TlvTag::QUEUE_DEPTH, queueDepth);
+    pkt.getTLV_uint32(TlvTag::TX_COUNT, txCount);
+    pkt.getTLV_uint32(TlvTag::ACK_TIMEOUTS, ackTimeouts);
 
     snprintf(topic, sizeof(topic), "casa/iot/device_%02X/uptime", srcId);
     snprintf(payload, sizeof(payload), "%lu", (unsigned long)uptime);
@@ -76,6 +90,55 @@ static void publishHeartbeat(uint8_t srcId, uint32_t uptime, int8_t rssi) {
     snprintf(topic, sizeof(topic), "casa/iot/device_%02X/rssi", srcId);
     snprintf(payload, sizeof(payload), "%d", rssi);
     mqtt.publish(topic, payload, true);
+
+    if (freeHeap > 0) {
+        snprintf(topic, sizeof(topic), "casa/iot/device_%02X/heap", srcId);
+        snprintf(payload, sizeof(payload), "%lu", (unsigned long)freeHeap);
+        mqtt.publish(topic, payload, true);
+    }
+
+    if (txCount > 0) {
+        snprintf(topic, sizeof(topic), "casa/iot/device_%02X/tx_count", srcId);
+        snprintf(payload, sizeof(payload), "%lu", (unsigned long)txCount);
+        mqtt.publish(topic, payload, true);
+    }
+
+    if (ackTimeouts > 0) {
+        snprintf(topic, sizeof(topic), "casa/iot/device_%02X/ack_timeouts", srcId);
+        snprintf(payload, sizeof(payload), "%lu", (unsigned long)ackTimeouts);
+        mqtt.publish(topic, payload, true);
+    }
+}
+
+static void publishStateReport(uint8_t srcId, const IoTPacket &pkt) {
+    if (!mqttDisponible) return;
+    char topic[48], payload[8];
+
+    uint8_t motionState = 0, buttonState = 0;
+
+    if (pkt.getTLV_uint8(TlvTag::STATE_MOTION, motionState)) {
+        snprintf(topic, sizeof(topic), "casa/iot/device_%02X/state/motion", srcId);
+        mqtt.publish(topic, motionState ? "active" : "idle", true);
+    }
+    if (pkt.getTLV_uint8(TlvTag::STATE_BUTTON, buttonState)) {
+        snprintf(topic, sizeof(topic), "casa/iot/device_%02X/state/button", srcId);
+        mqtt.publish(topic, buttonState ? "pressed" : "released", true);
+    }
+
+    // Genéricos — si vienen otros estados, publicarlos
+    uint8_t doorState = 0, relayState = 0, smokeState = 0;
+    if (pkt.getTLV_uint8(TlvTag::STATE_DOOR, doorState)) {
+        snprintf(topic, sizeof(topic), "casa/iot/device_%02X/state/door", srcId);
+        mqtt.publish(topic, doorState ? "open" : "closed", true);
+    }
+    if (pkt.getTLV_uint8(TlvTag::STATE_RELAY, relayState)) {
+        snprintf(topic, sizeof(topic), "casa/iot/device_%02X/state/relay", srcId);
+        mqtt.publish(topic, relayState ? "on" : "off", true);
+    }
+    if (pkt.getTLV_uint8(TlvTag::STATE_SMOKE, smokeState)) {
+        snprintf(topic, sizeof(topic), "casa/iot/device_%02X/state/smoke", srcId);
+        mqtt.publish(topic, smokeState ? "detected" : "clear", true);
+    }
 }
 
 // ============================================================
@@ -112,7 +175,7 @@ void handleIoTPacket(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePo
             pkt.getTLV_int8(TlvTag::RSSI_VAL, rssi);
             LOG_DEBUG("HB 0x%02X: up=%lus rssi=%d boot=0x%04X",
                       pkt.src, (unsigned long)uptime, rssi, pkt.bootId);
-            publishHeartbeat(pkt.src, uptime, rssi);
+            publishHeartbeat(pkt.src, pkt);
             break;
         }
 
@@ -152,6 +215,12 @@ void handleIoTPacket(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePo
                 snprintf(payload, sizeof(payload), "%.1f", hum / 10.0);
                 if (mqttDisponible) mqtt.publish(topic, payload, true);
             }
+            break;
+        }
+
+        case MsgType::STATE_REPORT: {
+            LOG_INFO("STATE_REPORT 0x%02X recibido", pkt.src);
+            publishStateReport(pkt.src, pkt);
             break;
         }
 

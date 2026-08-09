@@ -82,6 +82,8 @@ enum class MsgType : uint8_t {
     ACK         = 0x10,   // Confirmación de recepción (protocolo, NO ejecución)
     HEARTBEAT   = 0x11,   // Estoy vivo + telemetría básica
     STATUS      = 0x12,   // Estado completo del dispositivo
+    STATE_REPORT  = 0x13, // Nodo → Central: estado actual de sensores/actuadores
+    STATE_REQUEST = 0x14, // Central → Nodo(s): pedido de re-publicar estado
 
     // Discovery
     HELLO       = 0x20,   // Dispositivo anuncia presencia al boot
@@ -162,6 +164,21 @@ enum class TlvTag : uint8_t {
     // === Status/Diag (0x90–0x9F) ===
     FREE_HEAP       = 0x90,   // uint32_t: bytes libres
     WIFI_RSSI       = 0x91,   // int8_t: RSSI actual
+    QUEUE_DEPTH     = 0x92,   // uint8_t: paquetes en cola
+    TX_COUNT        = 0x93,   // uint32_t: paquetes enviados total
+    RX_COUNT        = 0x94,   // uint32_t: paquetes recibidos total
+    ACK_TIMEOUTS    = 0x95,   // uint32_t: timeouts de ACK acumulados
+    RETRIES_COUNT   = 0x96,   // uint32_t: reintentos acumulados
+    BOOT_REASON     = 0x97,   // uint8_t: BootReason enum
+
+    // === State (0xA0–0xAF) — estado actual de sensores/actuadores ===
+    STATE_MOTION    = 0xA0,   // uint8_t: 0=idle, 1=active
+    STATE_DOOR      = 0xA1,   // uint8_t: 0=closed, 1=open
+    STATE_RELAY     = 0xA2,   // uint8_t: 0=off, 1=on
+    STATE_BUTTON    = 0xA3,   // uint8_t: 0=released, 1=pressed
+    STATE_ALARM     = 0xA4,   // uint8_t: 0=disarmed, 1=armed, 2=triggered
+    STATE_SMOKE     = 0xA5,   // uint8_t: 0=clear, 1=detected
+    STATE_FLOOD     = 0xA6,   // uint8_t: 0=dry, 1=wet
 
     // === Error (0xE0–0xEF) ===
     ERROR_CODE_TAG  = 0xE0,   // uint8_t: IoTError
@@ -240,6 +257,20 @@ enum class ResultCode : uint8_t {
     INVALID_VALUE       = 0x04,   // Valor del comando fuera de rango
     TIMEOUT             = 0x05,   // Actuador no respondió a tiempo
     REJECTED            = 0x06,   // Rechazado por política (ej: modo seguro)
+};
+
+// ============================================================
+// Razón de reinicio (para diagnóstico)
+// ============================================================
+
+enum class BootReason : uint8_t {
+    POWER_ON        = 0x00,
+    SOFTWARE_RESET  = 0x01,
+    WATCHDOG        = 0x02,
+    DEEP_SLEEP      = 0x03,
+    OTA_UPDATE      = 0x04,
+    CRASH           = 0x05,
+    UNKNOWN         = 0xFF,
 };
 
 // ============================================================

@@ -114,8 +114,38 @@ struct ReliableChannel {
     uint8_t   attempt;        // Intento actual (0-based)
     uint8_t   maxAttempts;
     unsigned long nextRetryAt; // millis() del próximo envío/reintento
+    unsigned long sentAt;      // millis() cuando se envió (para RTT)
     bool      active;          // Hay algo en vuelo
     bool      waitingAck;      // Esperando ACK
+};
+
+// ============================================================
+// Estadísticas internas (IoTStats)
+// ============================================================
+
+struct IoTStats {
+    uint32_t txPackets;       // Total paquetes enviados (incluyendo reintentos)
+    uint32_t rxPackets;       // Total paquetes recibidos válidos
+    uint32_t txReliable;      // Paquetes reliable iniciados
+    uint32_t ackReceived;     // ACKs recibidos exitosos
+    uint32_t ackTimeouts;     // Reliable que fallaron (sin ACK tras N intentos)
+    uint32_t retries;         // Reintentos individuales
+    uint32_t duplicates;      // Paquetes duplicados descartados
+    uint32_t crcErrors;       // Paquetes con CRC inválido (contados en deserialize)
+    uint32_t queueDrops;      // Eventos no encolados (cola llena)
+    uint32_t queueOverflows;  // Eventos que desplazaron otro (overflow policy)
+};
+
+// ============================================================
+// RTT (Round-Trip Time) del canal reliable
+// ============================================================
+
+struct IoTRtt {
+    uint32_t lastMs;    // Último RTT medido (ms)
+    uint32_t minMs;     // Mínimo histórico
+    uint32_t maxMs;     // Máximo histórico
+    uint32_t avgMs;     // Promedio móvil (EMA)
+    uint32_t samples;   // Cantidad de mediciones
 };
 
 // ============================================================
@@ -175,6 +205,11 @@ public:
     bool     isQueueFull() const;
     bool     isReliableInFlight() const { return _reliable.active; }
 
+    // --- Estadísticas ---
+    const IoTStats& getStats() const { return _stats; }
+    const IoTRtt& getRtt() const { return _rtt; }
+    void resetStats();
+
     // --- Remotos ---
     RemoteDevice* getRemote(uint8_t id);
     void registerRemote(uint8_t id, IPAddress ip, uint16_t port);
@@ -195,6 +230,10 @@ private:
 
     // Canal reliable (1 paquete en vuelo)
     ReliableChannel _reliable;
+
+    // Estadísticas
+    IoTStats _stats;
+    IoTRtt   _rtt;
 
     // Dispositivos remotos
     RemoteDevice _remotes[IOT_MAX_REMOTES];
