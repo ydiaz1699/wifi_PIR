@@ -27,9 +27,9 @@ const int pinLed = D6;
 
 const unsigned int puertoUDP = 4210;
 
-const unsigned long INTERVALO_RECONEXION_MQTT = 10000;  // era 5000 → 10s entre intentos para reducir bloqueos
-const unsigned long INTERVALO_UPTIME = 60000;
-const unsigned long INTERVALO_REINTENTO_WIFI = 5000;
-const unsigned long DURACION_BOCINA_MS = 1000;
-const unsigned long DURACION_TIMBRE_MS = 500;           // era 300 → 500ms para que se escuche mejor
-const unsigned long VENTANA_ANTIDUP_MS = 1500;
+const unsigned long INTERVALO_RECONEXION_MQTT = 15000;   // 15s entre reconexiones en modo INTELIGENTE
+const unsigned long INTERVALO_UPTIME = 60000;            // Publica uptime cada 60s
+const unsigned long INTERVALO_REINTENTO_WIFI = 5000;     // 5s entre reintentos WiFi
+const unsigned long DURACION_BOCINA_MS = 1000;           // Alarma motion: 1 segundo
+const unsigned long DURACION_TIMBRE_MS = 500;            // Timbre: 500ms
+const unsigned long VENTANA_ANTIDUP_MS = 1500;           // Anti-duplicado UDP

@@ -15,7 +15,7 @@ Buzzer buzzer(pinBocina);
 void setup() {
     Serial.begin(115200);
     delay(100);
-    LOG_INFO("===== Booting Alarma Receptor v3.2 =====");
+    LOG_INFO("===== Booting Alarma Receptor v3.3 =====");
 
     ESP.wdtEnable(8000);
 
@@ -25,11 +25,21 @@ void setup() {
 
     transitionTo(SystemState::BOOT);
     iniciarConexionWiFi();
+
+    // Esperar WiFi antes de decidir modo (máximo 10 segundos)
+    LOG_INFO("Esperando WiFi para decidir modo...");
+    unsigned long t0 = millis();
+    while (!wifiConectado() && millis() - t0 < 10000) {
+        ESP.wdtFeed();
+        delay(100);
+    }
+
     inicializarAlarma();
-    inicializarMQTT();
+    inicializarMQTT();  // Aquí se decide LOCAL o INTELIGENTE
     setupOTA();
 
-    transitionTo(SystemState::CONNECT_WIFI);
+    LOG_INFO("Modo de operacion: %s", modoConexionStr());
+    LOG_INFO("Setup completo — loop activo");
 }
 
 void loop() {
@@ -40,26 +50,21 @@ void loop() {
     handleOTA();
 
     // ============================================================
-    // PRIORIDAD #1: Procesar eventos UDP (PIR/timbre)
-    // Esto SIEMPRE corre primero, sin importar el estado de MQTT.
-    // El receptor debe responder ACK al emisor en <300ms.
+    // PRIORIDAD #1: Procesar eventos UDP (PIR/timbre) — SIEMPRE
+    // Esto corre en cada iteración del loop sin importar nada.
+    // Es la función primaria del dispositivo.
     // ============================================================
     manejarAlarma();
 
     // ============================================================
     // PRIORIDAD #2: MQTT
-    // - Si ya está conectado: mqtt.loop() es instantáneo, siempre corre.
-    // - Si NO está conectado: connect() bloquea ~5s en ESP8266 cuando
-    //   el broker no responde. Solo permitimos ese intento si:
-    //   (a) la bocina NO está sonando (no perder eventos durante alarma)
-    //   (b) manejarMQTT() internamente controla el backoff (10s/30s)
+    // En modo LOCAL: manejarMQTT() solo hace el sondeo cada 5 min.
+    // En modo INTELIGENTE: mqtt.loop() + reconexión si se pierde.
+    // Internamente, manejarMQTT() ya verifica que no intente
+    // connect() mientras la bocina esté sonando.
     // ============================================================
     if (wifiConectado()) {
-        if (mqtt.connected()) {
-            manejarMQTT();  // mqtt.loop() — instantáneo
-        } else if (!buzzer.isOn()) {
-            manejarMQTT();  // puede bloquear ~5s, pero solo cada 10-30s
-        }
+        manejarMQTT();
     }
 
     // --- Publicar cambios de estado de la bocina ---
@@ -73,35 +78,5 @@ void loop() {
     // --- Transición de vuelta a READY cuando termina la alarma ---
     if (inState(SystemState::ALARM_TRIGGERED) && !buzzer.isOn()) {
         transitionTo(SystemState::READY);
-    }
-
-    // --- Manejo de ERROR/RECOVER ---
-    if (inState(SystemState::ERROR)) {
-        static unsigned long entradaError = 0;
-        static bool primeraVezEnError = true;
-        if (primeraVezEnError) {
-            entradaError = millis();
-            primeraVezEnError = false;
-            LOG_WARN("Sistema en ERROR: WiFi/MQTT fallando, alarma sigue en modo local");
-        }
-        if (millis() - entradaError > 5000) {
-            transitionTo(SystemState::RECOVER);
-            primeraVezEnError = true;
-        }
-    }
-
-    if (inState(SystemState::RECOVER)) {
-        static bool intentoHecho = false;
-        if (!intentoHecho) {
-            LOG_WARN("RECOVER: forzando reconexion WiFi/MQTT");
-            WiFi.disconnect();
-            mqtt.disconnect();
-            iniciarConexionWiFi();
-            intentoHecho = true;
-        }
-        if (wifiConectado() && mqtt.connected()) {
-            intentoHecho = false;
-            transitionTo(SystemState::READY);
-        }
     }
 }
