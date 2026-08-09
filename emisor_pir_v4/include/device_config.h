@@ -1,5 +1,5 @@
 /**
- * Configuración específica de este emisor.
+ * Configuración específica de este emisor — V4.1
  *
  * Para crear un nuevo emisor (PIR02, TIMBRE01, PUERTA01, etc.):
  * 1. Cambiar MY_DEVICE_ID a un ID único (ver rangos en IoTProtocol.h)
@@ -14,9 +14,9 @@
 #include <IoTProtocol.h>
 
 // --- Identidad del dispositivo ---
-#define MY_DEVICE_ID    0x02              // ID único en la red (PIR01 = 0x02)
-#define MY_DEVICE_TYPE  DeviceType::PIR_SENSOR
-#define MY_DEVICE_NAME  "PIR Entrada"
+#define MY_DEVICE_ID    0x02                     // ID único en la red
+#define MY_DEVICE_TYPE  DeviceType::PIR_SENSOR   // Clase del dispositivo
+#define MY_DEVICE_NAME  "PIR Entrada"            // Nombre legible
 
 // --- Red ---
 extern IPAddress dispositivo_IP;

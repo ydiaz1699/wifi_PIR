@@ -1,30 +1,24 @@
 /**
- * IoTProtocol V4 — Protocolo binario universal para redes de sensores ESP8266/ESP32
+ * IoTProtocol V4.1 — Protocolo binario universal para redes de sensores ESP8266/ESP32
  *
- * Características:
- * - Cabecera binaria compacta (14 bytes fijos)
- * - Payload TLV (Type-Length-Value) extensible
- * - CRC16 para integridad
- * - IDs numéricos para dispositivos (1 byte origen, 1 byte destino)
- * - Número de secuencia (16 bits)
- * - Flags: ACK_REQUIRED, URGENT, HAS_TIMESTAMP, RELIABLE
- * - Tipos de mensaje: EVENT, DATA, COMMAND, ACK, HEARTBEAT, HELLO, HELLO_ACK, ERROR
- * - ACK selectivo (solo cuando FLAG lo indica)
- * - Descubrimiento automático (HELLO/HELLO_ACK)
- * - Heartbeat para monitoreo de dispositivos vivos
+ * Cambios V4.0 → V4.1:
+ * - SEQ ampliado de 16 a 32 bits (elimina preocupaciones por rollover)
+ * - BOOT_ID de 16 bits en cabecera (resuelve reinicio + SEQ vuelve a 1)
+ * - Validación estricta: len == expectedLen, version check
+ * - TLV estricto: tamaño exacto para tipos fijos
+ * - Separación clara: ACK = recibí, RESPONSE = ejecuté
+ * - Códigos de error definidos
+ * - Flags: PRIORITY_HIGH, PRIORITY_BG para cola con prioridades
  *
- * Formato del paquete:
- * ┌───────┬─────┬──────┬─────┬─────┬──────┬───────┬─────────┬───────┐
- * │ MAGIC │ VER │ TYPE │ SRC │ DST │ SEQ  │ FLAGS │ PAY_LEN │ [TLV] │
- * │ 2B    │ 1B  │ 1B   │ 1B  │ 1B  │ 2B   │ 1B    │ 2B      │ NB    │
- * └───────┴─────┴──────┴─────┴─────┴──────┴───────┴─────────┴───────┘
- *                                                              │
- *                                                         ┌────┴────┐
- *                                                         │  CRC16  │
- *                                                         │  2B     │
- *                                                         └─────────┘
+ * Formato del paquete V4.1:
+ * ┌───────┬─────┬──────┬─────┬─────┬────────┬──────┬───────┬─────────┬─────────┬───────┐
+ * │ MAGIC │ VER │ TYPE │ SRC │ DST │BOOT_ID │ SEQ  │ FLAGS │ PAY_LEN │ PAYLOAD │ CRC16 │
+ * │ 2B    │ 1B  │ 1B   │ 1B  │ 1B  │ 2B     │ 4B   │ 1B    │ 1B      │ N B     │ 2B    │
+ * └───────┴─────┴──────┴─────┴─────┴────────┴──────┴───────┴─────────┴─────────┴───────┘
  *
- * TLV format:
+ * Header total: 14 bytes + payload + 2 bytes CRC = 16 + N bytes mínimo
+ *
+ * TLV format (dentro de payload):
  * ┌──────┬────────┬───────┐
  * │ TAG  │ LENGTH │ VALUE │
  * │ 1B   │ 1B     │ N B   │
@@ -35,108 +29,146 @@
 #include <Arduino.h>
 
 // ============================================================
+// Versión del protocolo
+// ============================================================
+
+#define IOT_PROTOCOL_MAJOR  4
+#define IOT_PROTOCOL_MINOR  1
+#define IOT_PROTOCOL_VER    0x41   // Wire format: major<<4 | minor (compacto)
+
+// ============================================================
 // Constantes del protocolo
 // ============================================================
 
 #define IOT_MAGIC_0       0xA5
 #define IOT_MAGIC_1       0x5A
-#define IOT_PROTOCOL_VER  4
 
-#define IOT_HEADER_SIZE   11   // MAGIC(2) + VER(1) + TYPE(1) + SRC(1) + DST(1) + SEQ(2) + FLAGS(1) + PAY_LEN(2)
+// Header: MAGIC(2) + VER(1) + TYPE(1) + SRC(1) + DST(1) + BOOT_ID(2) + SEQ(4) + FLAGS(1) + PAY_LEN(1)
+#define IOT_HEADER_SIZE   14
 #define IOT_CRC_SIZE      2
-#define IOT_MAX_PAYLOAD   64   // Máximo payload TLV (suficiente para la mayoría de sensores)
-#define IOT_MAX_PACKET    (IOT_HEADER_SIZE + IOT_MAX_PAYLOAD + IOT_CRC_SIZE)
+#define IOT_MAX_PAYLOAD   64
+#define IOT_MAX_PACKET    (IOT_HEADER_SIZE + IOT_MAX_PAYLOAD + IOT_CRC_SIZE)  // 80 bytes max
 
 // ============================================================
-// Device IDs (1 byte: 0-255 dispositivos)
+// Device IDs (1 byte: 0-255)
 // ============================================================
+// Convención (no restricción en código):
+// 0x00 = reservado (no usar)
+// 0x01 = CENTRAL
+// 0x02–0x1F = sensores PIR/motion
+// 0x20–0x3F = botones/timbres/entrada
+// 0x40–0x5F = temperatura/humedad/ambiente
+// 0x60–0x7F = relés/actuadores
+// 0x80–0x9F = displays
+// 0xA0–0xFE = futuros
+// 0xFF = BROADCAST
 
-#define IOT_DEVICE_BROADCAST  0x00   // Broadcast a todos
-#define IOT_DEVICE_CENTRAL    0x01   // Receptor central
-
-// Rangos sugeridos:
-// 0x02 - 0x1F: PIR sensors
-// 0x20 - 0x3F: Botones/timbres
-// 0x40 - 0x5F: Temperatura/humedad
-// 0x60 - 0x7F: Relés/actuadores
-// 0x80 - 0x9F: Displays
-// 0xA0 - 0xFE: Reservado para expansión
-// 0xFF: ID no asignado
+#define IOT_DEVICE_CENTRAL    0x01
+#define IOT_DEVICE_BROADCAST  0xFF
 
 // ============================================================
 // Tipos de mensaje (1 byte)
 // ============================================================
 
 enum class MsgType : uint8_t {
-    EVENT       = 0x01,   // Sensor → Central (PIR, botón, puerta, etc.)
-    DATA        = 0x02,   // Sensor → Central (temperatura, humedad, etc.)
-    COMMAND     = 0x03,   // Central → Actuador (relé ON, LED toggle, etc.)
-    RESPONSE    = 0x04,   // Actuador → Central (respuesta a comando)
-    ACK         = 0x05,   // Confirmación genérica
-    HEARTBEAT   = 0x06,   // Cualquiera → Central (estoy vivo)
-    HELLO       = 0x07,   // Nuevo dispositivo anuncia presencia
-    HELLO_ACK   = 0x08,   // Central responde al HELLO
-    CONFIG      = 0x09,   // Central → Dispositivo (configuración remota)
-    ERROR_MSG   = 0x0A,   // Error genérico
-    DISPLAY     = 0x0B,   // Central → Display (texto/datos para LCD)
-    STATUS      = 0x0C,   // Cualquiera → Central (estado completo)
+    // Aplicación
+    EVENT       = 0x01,   // Sensor → Central: evento discreto (motion, timbre, puerta)
+    DATA        = 0x02,   // Sensor → Central: datos continuos (temperatura, humedad)
+    COMMAND     = 0x03,   // Central → Actuador: orden (relé ON, LED toggle)
+    RESPONSE    = 0x04,   // Actuador → Central: resultado de ejecución del comando
+    DISPLAY     = 0x05,   // Central → Display: texto/datos para LCD
+
+    // Control
+    ACK         = 0x10,   // Confirmación de recepción (protocolo, NO ejecución)
+    HEARTBEAT   = 0x11,   // Estoy vivo + telemetría básica
+    STATUS      = 0x12,   // Estado completo del dispositivo
+
+    // Discovery
+    HELLO       = 0x20,   // Dispositivo anuncia presencia al boot
+    HELLO_ACK   = 0x21,   // Central confirma registro
+
+    // Configuración
+    CONFIG      = 0x30,   // Central → Dispositivo: parámetros de configuración
+
+    // Error
+    ERROR_MSG   = 0xE0,   // Error genérico con código
 };
 
 // ============================================================
 // Flags (1 byte, bitmap)
 // ============================================================
 
-#define IOT_FLAG_ACK_REQUIRED   0x01   // El emisor espera ACK
-#define IOT_FLAG_URGENT         0x02   // Prioridad alta
-#define IOT_FLAG_RELIABLE       0x04   // Reintentar si no hay ACK
-#define IOT_FLAG_HAS_TIMESTAMP  0x08   // El payload incluye timestamp
+#define IOT_FLAG_ACK_REQUIRED   0x01   // Emisor espera ACK
+#define IOT_FLAG_RELIABLE       0x02   // Reintentar con backoff si no hay ACK
+#define IOT_FLAG_URGENT         0x04   // Prioridad URGENT (procesar antes en cola)
+#define IOT_FLAG_BACKGROUND     0x08   // Prioridad baja (descartable si cola llena)
+// Si ni URGENT ni BACKGROUND: prioridad NORMAL
 
 // ============================================================
-// TLV Tags (1 byte cada uno)
+// Prioridades derivadas de flags
 // ============================================================
 
-enum class TlvTag : uint8_t {
-    // Eventos (0x01 - 0x1F)
-    EVENT_TYPE      = 0x01,   // uint8_t: tipo de evento (EventCode)
-    EVENT_VALUE     = 0x02,   // uint8_t: valor del evento (1=activo, 0=inactivo)
-
-    // Datos de sensores (0x20 - 0x3F)
-    TEMPERATURE     = 0x20,   // int16_t: temp × 10 (ej: 237 = 23.7°C)
-    HUMIDITY        = 0x21,   // uint16_t: hum × 10 (ej: 482 = 48.2%)
-    PRESSURE        = 0x22,   // uint16_t: hPa
-    LIGHT           = 0x23,   // uint16_t: lux
-    BATTERY_PCT     = 0x24,   // uint8_t: 0-100%
-    BATTERY_MV      = 0x25,   // uint16_t: mV
-    RSSI_VAL        = 0x26,   // int8_t: dBm
-
-    // Comandos (0x40 - 0x5F)
-    CMD_STATE       = 0x40,   // uint8_t: 0=OFF, 1=ON, 2=TOGGLE
-    CMD_DURATION    = 0x41,   // uint16_t: ms
-    CMD_CHANNEL     = 0x42,   // uint8_t: canal del relé (0-7)
-
-    // Display (0x60 - 0x7F)
-    DISPLAY_LINE    = 0x60,   // uint8_t: número de línea (0-3)
-    DISPLAY_TEXT    = 0x61,   // string: texto a mostrar
-    DISPLAY_CLEAR   = 0x62,   // uint8_t: 1=limpiar pantalla
-
-    // Discovery/Config (0x80 - 0x9F)
-    DEVICE_NAME     = 0x80,   // string: nombre legible (ej: "PIR Entrada")
-    DEVICE_TYPE     = 0x81,   // uint8_t: DeviceType enum
-    CAPABILITY      = 0x82,   // uint8_t: capacidad que reporta
-    FW_VERSION      = 0x83,   // string: versión firmware
-
-    // Timestamps (0xA0 - 0xAF)
-    TIMESTAMP_MS    = 0xA0,   // uint32_t: millis() del emisor
-    UPTIME_SEC      = 0xA1,   // uint32_t: segundos desde boot
-
-    // Status (0xC0 - 0xDF)
-    FREE_HEAP       = 0xC0,   // uint32_t: bytes libres
-    WIFI_RSSI       = 0xC1,   // int8_t: RSSI actual
-    ERROR_CODE      = 0xC2,   // uint8_t: código de error
+enum class Priority : uint8_t {
+    URGENT      = 0,   // Humo, flood, tamper — nunca descartable
+    NORMAL      = 1,   // Motion, puerta, timbre
+    BACKGROUND  = 2,   // Temperatura, heartbeat — descartable
 };
 
 // ============================================================
-// Códigos de eventos (van dentro de TLV EVENT_TYPE)
+// TLV Tags (1 byte)
+// ============================================================
+
+enum class TlvTag : uint8_t {
+    // === Eventos (0x01–0x0F) ===
+    EVENT_TYPE      = 0x01,   // uint8_t: EventCode
+    EVENT_VALUE     = 0x02,   // uint8_t: 1=activo, 0=inactivo
+
+    // === Datos de sensores (0x10–0x2F) ===
+    TEMPERATURE     = 0x10,   // int16_t: temp × 10 (237 = 23.7°C)
+    HUMIDITY        = 0x11,   // uint16_t: hum × 10 (482 = 48.2%)
+    PRESSURE        = 0x12,   // uint16_t: hPa
+    LIGHT           = 0x13,   // uint16_t: lux
+    BATTERY_PCT     = 0x14,   // uint8_t: 0–100%
+    BATTERY_MV      = 0x15,   // uint16_t: mV
+    RSSI_VAL        = 0x16,   // int8_t: dBm
+
+    // === Comandos (0x30–0x3F) ===
+    CMD_STATE       = 0x30,   // uint8_t: 0=OFF, 1=ON, 2=TOGGLE
+    CMD_DURATION    = 0x31,   // uint16_t: ms
+    CMD_CHANNEL     = 0x32,   // uint8_t: canal (0–7)
+
+    // === Respuesta (0x40–0x4F) ===
+    RESULT_CODE     = 0x40,   // uint8_t: 0=OK, 1=FAIL, 2=BUSY, 3=NOT_SUPPORTED
+    RESULT_STATE    = 0x41,   // uint8_t: estado actual tras ejecutar
+
+    // === Display (0x50–0x5F) ===
+    DISPLAY_LINE    = 0x50,   // uint8_t: línea (0–3)
+    DISPLAY_TEXT    = 0x51,   // string: texto
+    DISPLAY_CLEAR   = 0x52,   // uint8_t: 1=clear
+
+    // === Discovery/Config (0x60–0x7F) ===
+    DEVICE_NAME     = 0x60,   // string: nombre legible
+    DEVICE_TYPE_TAG = 0x61,   // uint8_t: DeviceType enum
+    CAPABILITY      = 0x62,   // uint8_t: capacidad (puede repetirse)
+    FW_VERSION      = 0x63,   // string: "4.1.0"
+    BOOT_ID_TAG     = 0x64,   // uint16_t: boot_id (para HELLO)
+
+    // === Timestamps/Telemetría (0x80–0x8F) ===
+    UPTIME_SEC      = 0x80,   // uint32_t: segundos desde boot
+    TIMESTAMP_MS    = 0x81,   // uint32_t: millis() del emisor
+
+    // === Status/Diag (0x90–0x9F) ===
+    FREE_HEAP       = 0x90,   // uint32_t: bytes libres
+    WIFI_RSSI       = 0x91,   // int8_t: RSSI actual
+
+    // === Error (0xE0–0xEF) ===
+    ERROR_CODE_TAG  = 0xE0,   // uint8_t: IoTError
+    ERROR_SEQ       = 0xE1,   // uint32_t: SEQ del paquete que causó error
+    ERROR_DETAIL    = 0xE2,   // string: detalle legible (debug)
+};
+
+// ============================================================
+// Códigos de eventos
 // ============================================================
 
 enum class EventCode : uint8_t {
@@ -150,42 +182,69 @@ enum class EventCode : uint8_t {
     FLOOD           = 0x08,
     TAMPER          = 0x09,
     LOW_BATTERY     = 0x0A,
+    WINDOW_OPEN     = 0x0B,
+    WINDOW_CLOSE    = 0x0C,
+    VIBRATION       = 0x0D,
+    GAS_DETECTED    = 0x0E,
 };
 
 // ============================================================
-// Tipos de dispositivo (para HELLO/discovery)
+// Tipos de dispositivo
 // ============================================================
 
 enum class DeviceType : uint8_t {
-    CENTRAL     = 0x01,
-    PIR_SENSOR  = 0x02,
-    BUTTON      = 0x03,
-    TEMP_SENSOR = 0x04,
-    RELAY       = 0x05,
-    DISPLAY     = 0x06,
-    DOOR_SENSOR = 0x07,
-    SMOKE_SENSOR = 0x08,
-    MULTI_SENSOR = 0x09,
+    CENTRAL         = 0x01,
+    PIR_SENSOR      = 0x02,
+    BUTTON          = 0x03,
+    TEMP_SENSOR     = 0x04,
+    RELAY           = 0x05,
+    DISPLAY_DEV     = 0x06,
+    DOOR_SENSOR     = 0x07,
+    SMOKE_SENSOR    = 0x08,
+    MULTI_SENSOR    = 0x09,
+    HUMIDITY_SENSOR = 0x0A,
+    FLOOD_SENSOR    = 0x0B,
+    GAS_SENSOR      = 0x0C,
 };
 
 // ============================================================
-// Estructura del paquete
+// Códigos de error
+// ============================================================
+
+enum class IoTError : uint8_t {
+    ERR_NONE            = 0x00,
+    ERR_BAD_VERSION     = 0x01,
+    ERR_BAD_CRC         = 0x02,
+    ERR_BAD_LENGTH      = 0x03,
+    ERR_UNKNOWN_TYPE    = 0x04,
+    ERR_UNKNOWN_DEVICE  = 0x05,
+    ERR_INVALID_TLV     = 0x06,
+    ERR_QUEUE_FULL      = 0x07,
+    ERR_NOT_SUPPORTED   = 0x08,
+    ERR_AUTH_FAILED     = 0x09,
+    ERR_BUSY            = 0x0A,
+    ERR_TIMEOUT         = 0x0B,
+};
+
+// ============================================================
+// Estructura del paquete V4.1
 // ============================================================
 
 struct IoTPacket {
-    // Cabecera
-    uint8_t  version;
-    MsgType  type;
-    uint8_t  src;
-    uint8_t  dst;
-    uint16_t seq;
-    uint8_t  flags;
+    // --- Cabecera ---
+    uint8_t  version;     // IOT_PROTOCOL_VER (0x41)
+    MsgType  type;        // Tipo de mensaje
+    uint8_t  src;         // ID origen
+    uint8_t  dst;         // ID destino
+    uint16_t bootId;      // ID de sesión (random al boot, resuelve reinicios)
+    uint32_t seq;         // Número de secuencia (32 bits, nunca rollover en la práctica)
+    uint8_t  flags;       // Bitmap de flags
 
-    // Payload TLV
+    // --- Payload TLV ---
     uint8_t  payload[IOT_MAX_PAYLOAD];
-    uint16_t payloadLen;
+    uint8_t  payloadLen;  // 1 byte suficiente (max 64)
 
-    // Métodos para construir payload TLV
+    // === Escribir TLV ===
     void clearPayload();
     bool addTLV_uint8(TlvTag tag, uint8_t value);
     bool addTLV_int8(TlvTag tag, int8_t value);
@@ -194,22 +253,30 @@ struct IoTPacket {
     bool addTLV_uint32(TlvTag tag, uint32_t value);
     bool addTLV_string(TlvTag tag, const char* str);
 
-    // Métodos para leer payload TLV
+    // === Leer TLV (validación estricta de tamaño) ===
     bool getTLV_uint8(TlvTag tag, uint8_t &value) const;
     bool getTLV_int8(TlvTag tag, int8_t &value) const;
     bool getTLV_uint16(TlvTag tag, uint16_t &value) const;
     bool getTLV_int16(TlvTag tag, int16_t &value) const;
     bool getTLV_uint32(TlvTag tag, uint32_t &value) const;
     bool getTLV_string(TlvTag tag, char* buf, uint8_t maxLen) const;
+    bool hasTLV(TlvTag tag) const;
 
-    // Helpers
-    bool needsAck() const { return (flags & IOT_FLAG_ACK_REQUIRED) != 0; }
-    bool isUrgent() const { return (flags & IOT_FLAG_URGENT) != 0; }
-    bool isReliable() const { return (flags & IOT_FLAG_RELIABLE) != 0; }
+    // === Helpers ===
+    bool needsAck() const    { return (flags & IOT_FLAG_ACK_REQUIRED) != 0; }
+    bool isReliable() const  { return (flags & IOT_FLAG_RELIABLE) != 0; }
+    bool isUrgent() const    { return (flags & IOT_FLAG_URGENT) != 0; }
+    bool isBackground() const { return (flags & IOT_FLAG_BACKGROUND) != 0; }
+
+    Priority priority() const {
+        if (flags & IOT_FLAG_URGENT) return Priority::URGENT;
+        if (flags & IOT_FLAG_BACKGROUND) return Priority::BACKGROUND;
+        return Priority::NORMAL;
+    }
 };
 
 // ============================================================
-// CRC16
+// CRC16-CCITT
 // ============================================================
 
 uint16_t iot_crc16(const uint8_t* data, size_t len);
@@ -218,8 +285,26 @@ uint16_t iot_crc16(const uint8_t* data, size_t len);
 // Serialización / Deserialización
 // ============================================================
 
-// Serializa paquete → buffer. Retorna tamaño total o 0 si error.
+/**
+ * Serializa IoTPacket → buffer wire format.
+ * @return tamaño total escrito, o 0 si error (buffer insuficiente).
+ */
 size_t iot_serialize(const IoTPacket &pkt, uint8_t* buf, size_t bufSize);
 
-// Deserializa buffer → paquete. Retorna true si válido (magic + CRC ok).
+/**
+ * Deserializa buffer → IoTPacket.
+ * Validación estricta:
+ * - Magic bytes correctos
+ * - Versión compatible (major debe coincidir)
+ * - Longitud exacta (len == expectedLen)
+ * - CRC16 válido
+ * @return true si paquete válido, false si cualquier check falla.
+ */
 bool iot_deserialize(const uint8_t* buf, size_t len, IoTPacket &pkt);
+
+/**
+ * Valida la estructura TLV del payload.
+ * Recorre todos los TLV verificando que no hay desbordamiento.
+ * @return true si payload TLV es estructuralmente válido.
+ */
+bool iot_validate_tlv(const uint8_t* payload, uint8_t payloadLen);

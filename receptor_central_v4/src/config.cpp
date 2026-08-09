@@ -29,12 +29,12 @@ const int pinLed = D6;
 
 // --- IoTProtocol ---
 const uint16_t IOT_UDP_PORT = 4210;
-const uint8_t MY_DEVICE_ID = IOT_DEVICE_CENTRAL;  // 0x01
+const uint8_t MY_DEVICE_ID = IOT_DEVICE_CENTRAL;
 
 // --- Timings ---
 const unsigned long DURACION_BOCINA_MOTION_MS = 1000;
 const unsigned long DURACION_BOCINA_TIMBRE_MS = 500;
 const unsigned long DURACION_BOCINA_PUERTA_MS = 2000;
 const unsigned long MQTT_RECONNECT_INTERVAL_MS = 15000;
-const unsigned long MQTT_SONDEO_INTERVAL_MS = 300000;  // 5 min
-const unsigned long HEARTBEAT_TIMEOUT_MS = 180000;     // 3 min sin heartbeat = offline
+const unsigned long MQTT_SONDEO_INTERVAL_MS = 300000;
+const unsigned long HEARTBEAT_TIMEOUT_MS = 180000;

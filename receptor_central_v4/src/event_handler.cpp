@@ -1,11 +1,9 @@
 /**
- * Event Handler V4 — Procesamiento genérico de eventos IoTProtocol
+ * Event Handler V4.1 — Procesamiento genérico de eventos IoTProtocol
  *
  * El receptor NO necesita saber de antemano qué sensores existen.
  * Cualquier dispositivo que envíe un EVENT válido será procesado.
- *
- * La acción depende del EventCode (MOTION, TIMBRE, DOOR_OPEN, etc.)
- * y del modo actual del sistema (armado/desarmado).
+ * La acción depende del EventCode y del modo actual (armado/desarmado).
  */
 
 #include "event_handler.h"
@@ -19,7 +17,7 @@ extern PubSubClient mqtt;
 extern bool mqttDisponible;
 extern String modoAlarma;
 
-// --- Tabla de nombres para log ---
+// --- Nombres para log ---
 static const char* eventCodeToStr(EventCode code) {
     switch (code) {
         case EventCode::MOTION:       return "MOTION";
@@ -35,60 +33,41 @@ static const char* eventCodeToStr(EventCode code) {
     }
 }
 
-// --- Determinar duración de bocina según evento ---
+// --- Duración de bocina por tipo de evento ---
 static unsigned long duracionPorEvento(EventCode code) {
     switch (code) {
         case EventCode::MOTION:       return DURACION_BOCINA_MOTION_MS;
         case EventCode::TIMBRE:       return DURACION_BOCINA_TIMBRE_MS;
         case EventCode::BUTTON_PRESS: return DURACION_BOCINA_TIMBRE_MS;
         case EventCode::DOOR_OPEN:    return DURACION_BOCINA_PUERTA_MS;
-        case EventCode::SMOKE:        return 5000;  // Alarma larga
+        case EventCode::SMOKE:        return 5000;
         case EventCode::FLOOD:        return 3000;
         default:                      return DURACION_BOCINA_TIMBRE_MS;
     }
 }
 
-// --- ¿El evento activa bocina según el modo actual? ---
+// --- ¿Activar bocina? Depende del modo ---
 static bool debeActivarBocina(EventCode code) {
-    // TIMBRE siempre suena (es un aviso, no alarma)
-    if (code == EventCode::TIMBRE || code == EventCode::BUTTON_PRESS) {
-        return true;
-    }
-    // SMOKE y FLOOD siempre suenan (emergencia)
-    if (code == EventCode::SMOKE || code == EventCode::FLOOD) {
-        return true;
-    }
-    // MOTION, DOOR, TAMPER: solo si está armado
-    if (modoAlarma == "armado") {
-        return true;
-    }
-    return false;
+    // Siempre suenan (no dependen del modo)
+    if (code == EventCode::TIMBRE || code == EventCode::BUTTON_PRESS) return true;
+    if (code == EventCode::SMOKE || code == EventCode::FLOOD) return true;
+
+    // Solo si armado
+    return (modoAlarma == "armado");
 }
 
-
-// ============================================================
-// Publicar evento en MQTT
-// Topic automático: casa/iot/device_XX/evento
-// ============================================================
-
-void publishEventToMQTT(uint8_t srcId, EventCode eventCode, uint8_t value) {
+// --- MQTT publish helpers ---
+static void publishEvent(uint8_t srcId, EventCode code, uint8_t value) {
     if (!mqttDisponible) return;
-
-    char topic[48];
+    char topic[48], payload[32];
     snprintf(topic, sizeof(topic), "casa/iot/device_%02X/evento", srcId);
-
-    char payload[32];
-    snprintf(payload, sizeof(payload), "%s|%d", eventCodeToStr(eventCode), value);
-
+    snprintf(payload, sizeof(payload), "%s|%d", eventCodeToStr(code), value);
     mqtt.publish(topic, payload);
-    LOG_DEBUG("MQTT pub: %s = %s", topic, payload);
 }
 
-void publishHeartbeatToMQTT(uint8_t srcId, uint32_t uptime, int8_t rssi) {
+static void publishHeartbeat(uint8_t srcId, uint32_t uptime, int8_t rssi) {
     if (!mqttDisponible) return;
-
-    char topic[48];
-    char payload[32];
+    char topic[48], payload[16];
 
     snprintf(topic, sizeof(topic), "casa/iot/device_%02X/uptime", srcId);
     snprintf(payload, sizeof(payload), "%lu", (unsigned long)uptime);
@@ -100,30 +79,28 @@ void publishHeartbeatToMQTT(uint8_t srcId, uint32_t uptime, int8_t rssi) {
 }
 
 // ============================================================
-// Handler principal — llamado por IoTNode cuando llega un paquete
+// Handler principal — IoTNode lo llama cuando llega un paquete válido
 // ============================================================
 
 void handleIoTPacket(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePort) {
     switch (pkt.type) {
         case MsgType::EVENT: {
-            uint8_t eventType = 0;
-            uint8_t eventValue = 1;
+            uint8_t eventType = 0, eventValue = 1;
             pkt.getTLV_uint8(TlvTag::EVENT_TYPE, eventType);
             pkt.getTLV_uint8(TlvTag::EVENT_VALUE, eventValue);
 
             EventCode code = static_cast<EventCode>(eventType);
-            LOG_INFO("EVENT de 0x%02X: %s val=%d (%s)",
+            LOG_INFO("EVENT 0x%02X: %s val=%d (%s boot=0x%04X seq=%lu)",
                      pkt.src, eventCodeToStr(code), eventValue,
-                     remoteIP.toString().c_str());
+                     remoteIP.toString().c_str(), pkt.bootId,
+                     (unsigned long)pkt.seq);
 
-            // Publicar en MQTT
-            publishEventToMQTT(pkt.src, code, eventValue);
+            publishEvent(pkt.src, code, eventValue);
 
-            // Activar bocina si corresponde
             if (eventValue > 0 && debeActivarBocina(code)) {
-                unsigned long duracion = duracionPorEvento(code);
-                buzzer.timedOn(duracion);
-                LOG_INFO("Bocina ON %lums (evento %s)", duracion, eventCodeToStr(code));
+                unsigned long dur = duracionPorEvento(code);
+                buzzer.timedOn(dur);
+                LOG_INFO("Bocina ON %lums (%s)", dur, eventCodeToStr(code));
             }
             break;
         }
@@ -133,57 +110,49 @@ void handleIoTPacket(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePo
             int8_t rssi = 0;
             pkt.getTLV_uint32(TlvTag::UPTIME_SEC, uptime);
             pkt.getTLV_int8(TlvTag::RSSI_VAL, rssi);
-
-            LOG_DEBUG("HEARTBEAT de 0x%02X: uptime=%lus rssi=%ddBm",
-                      pkt.src, (unsigned long)uptime, rssi);
-
-            publishHeartbeatToMQTT(pkt.src, uptime, rssi);
+            LOG_DEBUG("HB 0x%02X: up=%lus rssi=%d boot=0x%04X",
+                      pkt.src, (unsigned long)uptime, rssi, pkt.bootId);
+            publishHeartbeat(pkt.src, uptime, rssi);
             break;
         }
 
         case MsgType::HELLO: {
-            LOG_INFO("HELLO de 0x%02X (%s) — nuevo dispositivo!",
-                     pkt.src, remoteIP.toString().c_str());
-            // Podríamos publicar discovery en MQTT aquí
+            char name[20] = "";
+            uint8_t devType = 0;
+            pkt.getTLV_string(TlvTag::DEVICE_NAME, name, sizeof(name));
+            pkt.getTLV_uint8(TlvTag::DEVICE_TYPE_TAG, devType);
+            LOG_INFO("HELLO 0x%02X: \"%s\" type=%d boot=0x%04X (%s)",
+                     pkt.src, name, devType, pkt.bootId,
+                     remoteIP.toString().c_str());
             break;
         }
 
         case MsgType::DATA: {
-            // Datos de sensores (temperatura, humedad, etc.)
             int16_t temp = 0;
             uint16_t hum = 0;
-            bool hasTemp = pkt.getTLV_int16(TlvTag::TEMPERATURE, temp);
-            bool hasHum = pkt.getTLV_uint16(TlvTag::HUMIDITY, hum);
-
-            if (hasTemp) {
+            if (pkt.getTLV_int16(TlvTag::TEMPERATURE, temp)) {
                 char topic[48], payload[16];
                 snprintf(topic, sizeof(topic), "casa/iot/device_%02X/temperatura", pkt.src);
                 snprintf(payload, sizeof(payload), "%.1f", temp / 10.0);
                 if (mqttDisponible) mqtt.publish(topic, payload, true);
-                LOG_DEBUG("DATA temp de 0x%02X: %.1f°C", pkt.src, temp / 10.0);
+                LOG_DEBUG("DATA 0x%02X: temp=%.1f", pkt.src, temp / 10.0);
             }
-            if (hasHum) {
+            if (pkt.getTLV_uint16(TlvTag::HUMIDITY, hum)) {
                 char topic[48], payload[16];
                 snprintf(topic, sizeof(topic), "casa/iot/device_%02X/humedad", pkt.src);
                 snprintf(payload, sizeof(payload), "%.1f", hum / 10.0);
                 if (mqttDisponible) mqtt.publish(topic, payload, true);
-                LOG_DEBUG("DATA hum de 0x%02X: %.1f%%", pkt.src, hum / 10.0);
             }
             break;
         }
 
         case MsgType::STATUS: {
-            uint32_t freeHeap = 0;
-            int8_t wifiRssi = 0;
-            pkt.getTLV_uint32(TlvTag::FREE_HEAP, freeHeap);
-            pkt.getTLV_int8(TlvTag::WIFI_RSSI, wifiRssi);
-            LOG_DEBUG("STATUS de 0x%02X: heap=%lu rssi=%d",
-                      pkt.src, (unsigned long)freeHeap, wifiRssi);
+            LOG_DEBUG("STATUS 0x%02X recibido", pkt.src);
             break;
         }
 
         default:
-            LOG_DEBUG("Paquete tipo 0x%02X de 0x%02X (no procesado)",
+            LOG_DEBUG("Tipo 0x%02X de 0x%02X (no procesado)",
                       static_cast<uint8_t>(pkt.type), pkt.src);
             break;
     }

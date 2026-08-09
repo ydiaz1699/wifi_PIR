@@ -12,4 +12,4 @@ const int PIN_TIMBRE = D3;   // INPUT_PULLUP, activo en LOW
 // --- Timings ---
 const unsigned long ANTIREBOTE_PIR_MS = 2000;
 const unsigned long ANTIREBOTE_TIMBRE_MS = 800;
-const unsigned long HEARTBEAT_INTERVAL_MS = 60000;  // Heartbeat cada 60s
+const unsigned long HEARTBEAT_INTERVAL_MS = 60000;  // 60s

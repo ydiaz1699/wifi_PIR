@@ -1,14 +1,15 @@
 /**
- * Receptor Central IoT V4
+ * Receptor Central IoT — V4.1
  *
  * Recibe paquetes IoTProtocol de cualquier sensor/botón/dispositivo.
  * No tiene lógica hardcodeada por sensor — procesa genéricamente.
+ * La biblioteca IoTNode maneja ACK, deduplicación, y registro automático.
  *
- * Flujo del loop:
- *   1. WiFi management
- *   2. IoTNode.loop() — recibe UDP, despacha, envía ACKs
+ * Loop:
+ *   1. WiFi
+ *   2. IoTNode.loop() → recibe UDP, ACK, dedup, despacha
  *   3. Buzzer timer
- *   4. MQTT (si WiFi ok y modo HA)
+ *   4. MQTT (modo LOCAL/HA)
  *   5. OTA
  */
 
@@ -62,7 +63,6 @@ static void manejarWiFi() {
     }
 }
 
-
 // --- OTA ---
 static void setupOTA() {
     ArduinoOTA.setHostname("central-iot");
@@ -80,7 +80,7 @@ static void setupOTA() {
 void setup() {
     Serial.begin(115200);
     delay(100);
-    LOG_INFO("===== Central IoT Receptor V4.0 =====");
+    LOG_INFO("===== Central IoT V4.1 =====");
 
     ESP.wdtEnable(8000);
 
@@ -98,17 +98,18 @@ void setup() {
         delay(100);
     }
 
-    // Inicializar IoTProtocol node
+    // IoTNode
     node.begin();
     node.onPacketReceived(handleIoTPacket);
-    LOG_INFO("IoTNode iniciado (ID=0x%02X, puerto=%d)", MY_DEVICE_ID, IOT_UDP_PORT);
+    LOG_INFO("IoTNode (ID=0x%02X, bootId=0x%04X, puerto=%d)",
+             MY_DEVICE_ID, node.getBootId(), IOT_UDP_PORT);
 
-    // MQTT (modo dual LOCAL/HA)
+    // MQTT (dual LOCAL/HA)
     inicializarMQTT();
 
     setupOTA();
 
-    LOG_INFO("Modo MQTT: %s | Modo alarma: %s", modoMQTTStr(), modoAlarma.c_str());
+    LOG_INFO("Modo MQTT: %s | Alarma: %s", modoMQTTStr(), modoAlarma.c_str());
     LOG_INFO("Setup completo — esperando eventos...");
 }
 
@@ -122,10 +123,10 @@ void loop() {
     manejarWiFi();
     buzzer.loop();
 
-    // PRIORIDAD #1: IoTProtocol — recibir, ACK, despachar eventos
+    // PRIORIDAD #1: IoTProtocol (nunca bloquea)
     node.loop();
 
-    // PRIORIDAD #2: MQTT (no bloquea en modo LOCAL)
+    // PRIORIDAD #2: MQTT
     if (WiFi.status() == WL_CONNECTED) {
         manejarMQTT();
     }

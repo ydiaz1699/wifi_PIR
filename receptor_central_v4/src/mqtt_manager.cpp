@@ -1,5 +1,5 @@
 /**
- * MQTT Manager V4 — Modo dual LOCAL/HA (heredado de V3.3)
+ * MQTT Manager V4.1 — Modo dual LOCAL/HA
  *
  * - Al boot intenta una vez. Si broker responde → MODO_HA.
  * - Si no → MODO_LOCAL, sondeo cada 5 min.
@@ -47,7 +47,6 @@ static void mqttCallback(char* topic, byte* payload, unsigned int length) {
     }
 }
 
-
 static bool intentarConexionMQTT() {
     LOG_INFO("MQTT: conectando a %s:%d...", mqtt_server, mqtt_port);
 
@@ -87,14 +86,14 @@ void inicializarMQTT() {
         LOG_INFO("Boot: probando broker MQTT...");
         if (intentarConexionMQTT()) {
             modoMQTT = ModoMQTT::MODO_HA;
-            LOG_INFO(">>> Modo HA (Home Assistant) <<<");
+            LOG_INFO(">>> Modo HA <<<");
         } else {
             modoMQTT = ModoMQTT::MODO_LOCAL;
-            LOG_INFO(">>> Modo LOCAL (broker no disponible) <<<");
+            LOG_INFO(">>> Modo LOCAL <<<");
         }
     } else {
         modoMQTT = ModoMQTT::MODO_LOCAL;
-        LOG_INFO(">>> Modo LOCAL (sin WiFi al boot) <<<");
+        LOG_INFO(">>> Modo LOCAL (sin WiFi) <<<");
     }
     ultimoSondeo = millis();
 }
@@ -105,13 +104,13 @@ void manejarMQTT() {
         return;
     }
 
-    // --- MODO LOCAL: solo sondeo cada 5 min ---
+    // --- MODO LOCAL ---
     if (modoMQTT == ModoMQTT::MODO_LOCAL) {
         unsigned long ahora = millis();
         if (ahora - ultimoSondeo >= MQTT_SONDEO_INTERVAL_MS) {
             ultimoSondeo = ahora;
             if (!buzzer.isOn()) {
-                LOG_INFO("Sondeo: verificando broker...");
+                LOG_INFO("Sondeo broker...");
                 if (intentarConexionMQTT()) {
                     modoMQTT = ModoMQTT::MODO_HA;
                     LOG_INFO(">>> Broker detectado! Modo HA <<<");
@@ -121,13 +120,13 @@ void manejarMQTT() {
         return;
     }
 
-    // --- MODO HA: MQTT activo ---
+    // --- MODO HA ---
     if (!mqtt.connected()) {
         mqttDisponible = false;
         unsigned long ahora = millis();
         if (ahora - ultimoIntentoMQTT > MQTT_RECONNECT_INTERVAL_MS) {
             ultimoIntentoMQTT = ahora;
-            if (buzzer.isOn()) return;  // No bloquear durante alarma
+            if (buzzer.isOn()) return;
             if (!intentarConexionMQTT()) {
                 if (fallosConsecutivos >= 3) {
                     LOG_WARN("Broker caido, volviendo a LOCAL");
