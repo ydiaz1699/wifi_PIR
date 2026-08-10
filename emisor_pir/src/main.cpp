@@ -32,7 +32,7 @@ const int pinPIR = D2;
 const int pinTimbre = D3;
 
 // --- Timings ---
-const unsigned long ANTIREBOTE_PIR_MS = 500;
+const unsigned long ANTIREBOTE_PIR_MS = 200;    // Mínimo entre dos detecciones PIR
 const unsigned long ANTIREBOTE_TIMBRE_MS = 500;
 const unsigned long WIFI_RETRY_MS = 5000;
 const unsigned long ACK_TIMEOUT_MS = 500;     // Timeout para reenvío
@@ -213,7 +213,7 @@ void reenviarPendientes() {
 void setup() {
     Serial.begin(115200);
     delay(100);
-    LOG_INFO("===== Boot Emisor PIR+Timbre v3.5 (async ACK) =====");
+    LOG_INFO("===== Boot Emisor PIR+Timbre v3.5.1 (async ACK + PIR fix) =====");
     ESP.wdtEnable(8000);
     pinMode(pinPIR, INPUT);
     pinMode(pinTimbre, INPUT_PULLUP);
@@ -241,15 +241,25 @@ void loop() {
     // 2. Reenviar eventos sin ACK (solo si pasó timeout)
     reenviarPendientes();
 
-    // 3. PIR: flanco de subida — envío INMEDIATO
+    // 3. PIR: detección DUAL (flanco + re-trigger)
+    //    - Primera detección: flanco de subida (LOW→HIGH)
+    //    - Si el PIR sigue HIGH por más de ANTIREBOTE_PIR_MS:
+    //      se considera nueva activación (re-trigger)
+    //    - Esto permite detectar activaciones manuales rápidas
+    //      Y activaciones largas del PIR real
     bool pirActual = digitalRead(pinPIR) == HIGH;
+
     if (pirActual && !pirAnterior) {
+        // Flanco de subida: enviar inmediatamente
         unsigned long ahora = millis();
         if (ahora - ultimaDeteccionPIR > ANTIREBOTE_PIR_MS) {
             ultimaDeteccionPIR = ahora;
-            LOG_INFO("PIR detectado");
+            LOG_INFO("PIR detectado (flanco subida)");
             enviarEvento("MOTION");
         }
+    } else if (!pirActual && pirAnterior) {
+        // Flanco de bajada: el PIR se liberó, resetear para próxima detección
+        LOG_DEBUG("PIR liberado");
     }
     pirAnterior = pirActual;
 
