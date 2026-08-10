@@ -13,11 +13,9 @@
 #include "logger.h"
 #include <PubSubClient.h>
 #include <IoTAuth.h>
-#include <IoTStorage.h>
 
 extern Buzzer buzzer;
 extern IoTAuth auth;
-extern IoTStorage storage;
 extern PubSubClient mqtt;
 extern bool mqttDisponible;
 extern String modoAlarma;
@@ -152,7 +150,11 @@ static void publishStateReport(uint8_t srcId, const IoTPacket &pkt) {
 
 void handleIoTPacket(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePort) {
     // --- Auth verification V4.3 ---
-    if (storage.config().authEnabled && !auth.verifyPacket(pkt)) {
+    // verifyPacket() internamente decide:
+    //   - Si _required=true y paquete no tiene HMAC → rechaza
+    //   - Si _required=false y paquete no tiene HMAC → acepta
+    //   - Si tiene HMAC → verifica (rechaza si inválido)
+    if (!auth.verifyPacket(pkt)) {
         LOG_WARN("Paquete 0x%02X de 0x%02X rechazado: HMAC inválida", 
                  static_cast<uint8_t>(pkt.type), pkt.src);
         return;

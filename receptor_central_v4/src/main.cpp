@@ -28,11 +28,8 @@
 #include "mqtt_manager.h"
 #include "event_handler.h"
 
-// --- Shared secret (mismo que en emisores) ---
-static const uint8_t AUTH_KEY[] = {
-    0x4D, 0x79, 0x49, 0x6F, 0x54, 0x4B, 0x65, 0x79,
-    0x53, 0x65, 0x63, 0x72, 0x65, 0x74, 0x21, 0x21
-};
+// --- Shared secret (desde secrets.h, NO versionado) ---
+static const uint8_t AUTH_KEY[] = IOT_AUTH_KEY;
 
 // --- Hardware ---
 Led led(pinLed);
@@ -41,7 +38,7 @@ Buzzer buzzer(pinBocina);
 // --- IoTProtocol ---
 IoTStorage storage;
 IoTNode node(MY_DEVICE_ID, IOT_UDP_PORT);
-IoTAuth auth(AUTH_KEY, sizeof(AUTH_KEY));
+IoTAuth auth(AUTH_KEY, IOT_AUTH_KEY_LEN);
 
 // --- Estado ---
 String modoAlarma = "armado";
@@ -153,8 +150,9 @@ void setup() {
         req.seq = node.getNextSeq();
         req.flags = 0;
         req.clearPayload();
-        node.sendDirect(req, IPAddress(192, 168, 0, 255), IOT_UDP_PORT);
-        LOG_INFO("STATE_REQUEST broadcast enviado");
+        // Usar WiFi.broadcastIP() en vez de IP hardcodeada (respeta subnet)
+        node.sendDirect(req, WiFi.broadcastIP(), IOT_UDP_PORT);
+        LOG_INFO("STATE_REQUEST broadcast enviado (%s)", WiFi.broadcastIP().toString().c_str());
     }
 }
 

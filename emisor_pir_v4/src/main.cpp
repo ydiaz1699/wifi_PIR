@@ -20,17 +20,13 @@
 #include "device_config.h"
 #include "logger.h"
 
-// --- Shared secret para HMAC (16 bytes) ---
-// Mismo secreto en emisor y receptor. Cambiar por algo propio.
-static const uint8_t AUTH_KEY[] = {
-    0x4D, 0x79, 0x49, 0x6F, 0x54, 0x4B, 0x65, 0x79,  // "MyIoTKey"
-    0x53, 0x65, 0x63, 0x72, 0x65, 0x74, 0x21, 0x21   // "Secret!!"
-};
+// --- Shared secret para HMAC (desde secrets.h, NO versionado) ---
+static const uint8_t AUTH_KEY[] = IOT_AUTH_KEY;
 
 // --- Objetos globales ---
 IoTStorage storage;
 IoTNode node(MY_DEVICE_ID, UDP_PORT);
-IoTAuth auth(AUTH_KEY, sizeof(AUTH_KEY));
+IoTAuth auth(AUTH_KEY, IOT_AUTH_KEY_LEN);
 IoTConfigHandler* configHandler = nullptr;
 
 // --- Estado de sensores ---
@@ -113,7 +109,7 @@ static void sendStateReport(IPAddress destIP, uint16_t destPort) {
 // --- Callback de paquetes recibidos ---
 static void onPacketReceived(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePort) {
     // Verificar auth si está habilitado
-    if (storage.config().authEnabled && !auth.verifyPacket(pkt)) {
+    if (!auth.verifyPacket(pkt)) {
         LOG_WARN("Paquete de 0x%02X rechazado: auth inválida", pkt.src);
         return;
     }
@@ -196,6 +192,9 @@ void setup() {
     static IoTConfigHandler cfgHandler(storage, node);
     cfgHandler.onConfigApplied(onConfigApplied);
     configHandler = &cfgHandler;
+
+    // Sincronizar auth con config persistida
+    auth.setRequired(storage.config().authEnabled);
 
     LOG_INFO("IoTNode (bootId=0x%04X, puerto=%d)", node.getBootId(), UDP_PORT);
     LOG_INFO("Auth: %s", storage.config().authEnabled ? "HABILITADO" : "deshabilitado");
