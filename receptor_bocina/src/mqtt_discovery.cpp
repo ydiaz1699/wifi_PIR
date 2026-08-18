@@ -17,8 +17,9 @@ static void agregarDevice(JsonObject doc) {
 
 static void publicarEntidad(const char* topicConfig, void (*llenar)(JsonObject)) {
     StaticJsonDocument<768> doc;
-    llenar(doc.as<JsonObject>());
-    agregarDevice(doc.as<JsonObject>());
+    JsonObject o = doc.to<JsonObject>();
+    llenar(o);
+    agregarDevice(o);
 
     char payload[768];
     size_t n = serializeJson(doc, payload);
