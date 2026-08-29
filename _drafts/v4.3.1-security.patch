@@ -1,0 +1,372 @@
+Guarda todo lo siguiente como:
+
+`v4.3.1-security.patch`
+
+```diff
+diff --git a/lib/IoTProtocol/IoTAuth.h b/lib/IoTProtocol/IoTAuth.h
+index 0000000..0000000 100644
+--- a/lib/IoTProtocol/IoTAuth.h
++++ b/lib/IoTProtocol/IoTAuth.h
+@@ -1,7 +1,7 @@
+ /**
+  * IoTAuth V4.3 — Autenticación HMAC-SHA256 truncada para IoTProtocol
+  *
+  * Proporciona autenticación de paquetes usando HMAC-SHA256 truncado
+- * a 4 bytes. Suficiente para prevenir inyección casual en LAN WiFi.
++ * a 8 bytes.
+  *
+  * Funcionamiento:
+  * - Se calcula HMAC-SHA256(key, header + payload) → 32 bytes
+- * - Se trunca a los primeros 4 bytes
++ * - Se trunca a los primeros 8 bytes
+  * - Se agrega como TLV tag AUTH_HMAC4 al payload antes de serializar
+  * - El receptor verifica el HMAC antes de procesar
+@@ -240,11 +240,11 @@
+-// TLV tag para el HMAC truncado (4 bytes)
++// TLV tag para el HMAC truncado (8 bytes)
+ // Definido en rango 0xF0–0xFF (seguridad)
+ #define IOT_TLV_AUTH_HMAC4 0xF0
+ 
+ // Tamaño del HMAC truncado
+-#define IOT_HMAC_TRUNC_SIZE 4
++#define IOT_HMAC_TRUNC_SIZE 8
+ 
+ // Tamaño máximo de la clave compartida
+ #define IOT_AUTH_KEY_MAX_SIZE 32
+```
+
+```diff
+diff --git a/lib/IoTProtocol/IoTAuth.cpp b/lib/IoTProtocol/IoTAuth.cpp
+index 0000000..0000000 100644
+--- a/lib/IoTProtocol/IoTAuth.cpp
++++ b/lib/IoTProtocol/IoTAuth.cpp
+@@ -2259,10 +2259,10 @@
+  * IoTAuth V4.3 — Implementación HMAC-SHA256 truncada
+  *
+  * Usa BearSSL (integrado en ESP8266 Arduino core) para HMAC-SHA256.
+  * El HMAC se calcula sobre: version + type + src + dst + bootId + seq + flags + payload (sin auth TLV).
+- * Se trunca a 4 bytes y se agrega como último TLV del payload.
++ * Se trunca a 8 bytes y se agrega como último TLV del payload.
+  */
+@@ -2318,7 +2318,7 @@
+- // Truncar a los primeros 4 bytes
++ // Truncar a los primeros 8 bytes
+  memcpy(out, fullHmac, IOT_HMAC_TRUNC_SIZE);
+ }
+@@ -2330,7 +2330,7 @@
+ bool IoTAuth::signPacket(IoTPacket &pkt) {
+- // Verificar que hay espacio para el TLV de auth (tag:1 + len:1 + value:4 = 6 bytes)
++ // Verificar que hay espacio para el TLV de auth (tag:1 + len:1 + value:8 = 10 bytes)
+  if ((uint16_t)pkt.payloadLen + 2 + IOT_HMAC_TRUNC_SIZE > IOT_MAX_PAYLOAD) {
+      return false; // No hay espacio
+  }
+```
+
+```diff
+diff --git a/lib/IoTProtocol/IoTNode.h b/lib/IoTProtocol/IoTNode.h
+index 0000000..0000000 100644
+--- a/lib/IoTProtocol/IoTNode.h
++++ b/lib/IoTProtocol/IoTNode.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ #include "IoTProtocol.h"
+ #include <WiFiUdp.h>
+ 
++class IoTAuth;
++
+ // ============================================================
+ // Configuración
+ // ============================================================
+@@ -3365,10 +3366,13 @@ struct RemoteDevice {
+  IPAddress ip;
+  uint16_t port;
+ 
+  // Deduplicación: ventana de últimos N SEQ procesados
+  uint16_t bootId;
++ uint32_t lastSeq;
++ bool hasLastSeq;
+  uint32_t seqWindow[IOT_DEDUP_WINDOW];
+  uint8_t seqWindowCount; // Cuántos hay en la ventana (0–IOT_DEDUP_WINDOW)
+  uint8_t seqWindowHead; // Índice circular para insertar el siguiente
+ 
+@@ -3448,7 +3452,14 @@ class IoTNode {
+  IoTNode(uint8_t deviceId, uint16_t udpPort);
+ 
+  // --- Inicialización ---
+  void begin();
++ void begin(uint16_t persistentBootId);
++
++ // --- Autenticación ---
++ // IoTNode utiliza este objeto para firmar paquetes salientes
++ // y verificar paquetes entrantes antes de procesarlos.
++ void setAuth(IoTAuth* auth) { _auth = auth; }
+ 
+  // --- Loop (llamar cada iteración) ---
+  void loop();
+@@ -3511,7 +3522,7 @@ private:
+  uint8_t _deviceId;
+  uint16_t _udpPort;
+- uint16_t _bootId; // Random al begin()
++ uint16_t _bootId;
+  uint32_t _seq;
+  WiFiUDP _udp;
+ 
+@@ -3539,6 +3550,9 @@ private:
+  // Device state tracking
+  unsigned long _lastStateCheck;
+ 
++ // Autenticación opcional
++ IoTAuth* _auth;
++
+  // Callback
+  IoTPacketHandler _handler;
+```
+
+```diff
+diff --git a/lib/IoTProtocol/IoTNode.cpp b/lib/IoTProtocol/IoTNode.cpp
+index 0000000..0000000 100644
+--- a/lib/IoTProtocol/IoTNode.cpp
++++ b/lib/IoTProtocol/IoTNode.cpp
+@@ -2712,6 +2712,7 @@
+ 
+ #include "IoTNode.h"
++#include "IoTAuth.h"
+ #include <string.h>
+ 
+ // ============================================================
+@@ -2723,7 +2724,8 @@ IoTNode::IoTNode(uint8_t deviceId, uint16_t udpPort)
+  _queueCount(0), _overflowPolicy(QueueOverflow::DROP_OLDEST_BG),
+  _hbEnabled(false), _hbInterval(IOT_HEARTBEAT_INTERVAL),
+- _lastHb(0), _lastStateCheck(0), _handler(nullptr)
++ _lastHb(0), _lastStateCheck(0), _auth(nullptr),
++ _handler(nullptr)
+ {
+  memset(_queue, 0, sizeof(_queue));
+  memset(_remotes, 0, sizeof(_remotes));
+@@ -2733,11 +2735,22 @@ IoTNode::IoTNode(uint8_t deviceId, uint16_t udpPort)
+  _rtt.minMs = 0xFFFFFFFF; // Inicializar min alto
+ }
+ 
+ void IoTNode::begin() {
+  randomSeed(analogRead(A0) ^ micros());
+  _bootId = (uint16_t)(random(1, 65535));
+  _seq = 0;
+  _lastStateCheck = millis();
+  _udp.begin(_udpPort);
+ }
+ 
++void IoTNode::begin(uint16_t persistentBootId) {
++ _bootId = persistentBootId;
++ if (_bootId == 0) _bootId = 1;
++ _seq = 0;
++ _lastStateCheck = millis();
++ _udp.begin(_udpPort);
++}
++
+ // ============================================================
+ // Loop
+ // ============================================================
+@@ -2763,6 +2776,18 @@ void IoTNode::loop() {
+ // ============================================================
+ 
+ void IoTNode::_transmitPacket(const IoTPacket &pkt, IPAddress destIP, uint16_t destPort) {
++ IoTPacket signedPkt = pkt;
++
++ // Firmar todos los paquetes salientes cuando hay autenticación configurada.
++ // ACKs, heartbeat, HELLO, EVENT, STATE_REPORT, etc. pasan por aquí.
++ if (_auth && _auth->isRequired()) {
++     if (!signedPkt.isAuthenticated()) {
++         if (!_auth->signPacket(signedPkt)) {
++             return;
++         }
++     }
++ }
++
+  uint8_t buf[IOT_MAX_PACKET];
+- size_t len = iot_serialize(pkt, buf, sizeof(buf));
++ size_t len = iot_serialize(signedPkt, buf, sizeof(buf));
+  if (len > 0) {
+      _udp.beginPacket(destIP, destPort);
+      _udp.write(buf, len);
+@@ -2945,6 +2970,15 @@ void IoTNode::_processIncoming() {
+  IoTPacket pkt;
+  if (!iot_deserialize(_rxBuf, len, pkt)) return;
+ 
++ // Verificar autenticación ANTES de enviar ACK, deduplicar o despachar.
++ // Esto evita que un paquete falsificado pueda provocar efectos
++ // secundarios o confirmar un evento que nunca fue autenticado.
++ if (_auth && _auth->isRequired()) {
++     if (!_auth->verifyPacket(pkt)) {
++         _stats.rxPackets++;
++         return;
++     }
++ }
++
++ _stats.rxPackets++;
++
+  // *** FIX V4.1.1: ACK se envía SIEMPRE, incluso para duplicados ***
+  // Si el emisor retransmite porque no recibió nuestro ACK anterior,
+  // debemos responder ACK de nuevo aunque ya hayamos procesado el evento.
+@@ -3058,16 +3091,28 @@ bool IoTNode::_isDuplicate(uint8_t srcId, uint16_t bootId, uint32_t seq) {
+  if (!dev) return false; // Dispositivo desconocido → no es duplicado
+ 
+  // Si BOOT_ID cambió → dispositivo reinició → resetear ventana
+  if (dev->bootId != bootId) {
+      dev->bootId = bootId;
++     dev->lastSeq = seq;
++     dev->hasLastSeq = true;
+      dev->seqWindowCount = 0;
+      dev->seqWindowHead = 0;
+      // Insertar este SEQ como el primero
+      dev->seqWindow[0] = seq;
+      dev->seqWindowCount = 1;
+      dev->seqWindowHead = 1;
+      return false;
+  }
+ 
++ // Protección contra replay de SEQ antiguos.
++ //
++ // Se utiliza aritmética serial de uint32_t:
++ // (int32_t)(seq - lastSeq) <= 0 significa que el SEQ no avanza.
++ //
++ // Una retransmisión del mismo SEQ ya es duplicado.
++ // Un SEQ antiguo que quedó fuera de la ventana también se rechaza.
++ if (dev->hasLastSeq) {
++     int32_t delta = (int32_t)(seq - dev->lastSeq);
++     if (delta <= 0) return true;
++ }
++
+  // Buscar en la ventana
+  uint8_t count = dev->seqWindowCount;
+  for (uint8_t i = 0; i < count; i++) {
+      if (dev->seqWindow[i] == seq) return true; // DUPLICADO
+  }
+ 
+  // No encontrado → nuevo, insertar en ventana circular
+  dev->seqWindow[dev->seqWindowHead] = seq;
+  dev->seqWindowHead = (dev->seqWindowHead + 1) % IOT_DEDUP_WINDOW;
+  if (dev->seqWindowCount < IOT_DEDUP_WINDOW) dev->seqWindowCount++;
++ dev->lastSeq = seq;
++ dev->hasLastSeq = true;
+ 
+  return false;
+ }
+@@ -3107,6 +3152,8 @@ void IoTNode::_updateRemote(uint8_t srcId, IPAddress ip, uint16_t port,
+  _remotes[i].port = port;
+  _remotes[i].bootId = bootId;
++ _remotes[i].lastSeq = 0;
++ _remotes[i].hasLastSeq = false;
+  _remotes[i].seqWindowCount = 0;
+  _remotes[i].seqWindowHead = 0;
+  _remotes[i].lastSeen = millis();
+@@ -3124,6 +3171,8 @@ void IoTNode::_updateRemote(uint8_t srcId, IPAddress ip, uint16_t port,
+  _remotes[oldest].id = srcId;
+  _remotes[oldest].ip = ip;
+  _remotes[oldest].port = port;
+  _remotes[oldest].bootId = bootId;
++ _remotes[oldest].lastSeq = 0;
++ _remotes[oldest].hasLastSeq = false;
+  _remotes[oldest].lastSeen = millis();
+  _remotes[oldest].state = DeviceState::ONLINE;
+  _remotes[oldest].active = true;
+```
+
+```diff
+diff --git a/emisor_pir_v4/src/main.cpp b/emisor_pir_v4/src/main.cpp
+index 0000000..0000000 100644
+--- a/emisor_pir_v4/src/main.cpp
++++ b/emisor_pir_v4/src/main.cpp
+@@ -2170,11 +2170,12 @@ void setup() {
+  }
+ 
+- // --- IoTNode con BOOT_ID persistente ---
+- // Override del begin() para usar boot counter del storage
+- node.begin();
+- // Nota: node.begin() genera random bootId, pero podemos mejorarlo
+- // usando storage en futuras versiones (requiere cambio en IoTNode API)
++ // --- IoTNode con BOOT_ID persistente ---
++ // El boot counter de LittleFS es la fuente oficial de identidad
++ // de esta sesión de ejecución.
++ node.begin(storage.getBootId());
++ node.setAuth(&auth);
+ 
+  node.onPacketReceived(onPacketReceived);
+```
+
+```diff
+diff --git a/receptor_central_v4/src/main.cpp b/receptor_central_v4/src/main.cpp
+index 0000000..0000000 100644
+--- a/receptor_central_v4/src/main.cpp
++++ b/receptor_central_v4/src/main.cpp
+@@ -6194,8 +6194,10 @@ void setup() {
+  }
+ 
+  // IoTNode
+- node.begin();
++ node.begin(storage.getBootId());
++ node.setAuth(&auth);
+  node.onPacketReceived(handleIoTPacket);
++
+  LOG_INFO("IoTNode (ID=0x%02X, bootId=0x%04X, puerto=%d)",
+  MY_DEVICE_ID, node.getBootId(), IOT_UDP_PORT);
+```
+
+````
+
+Después de aplicar el patch:
+
+```bash
+git status
+git apply --check v4.3.1-security.patch
+git apply v4.3.1-security.patch
+````
+
+Si `git apply --check` termina sin salida, el patch debería poder aplicarse limpiamente.
+
+Luego:
+
+```bash
+cd emisor_pir_v4
+pio run
+```
+
+y:
+
+```bash
+cd ../receptor_central_v4
+pio run
+```
+
+Finalmente:
+
+```bash
+cd ..
+git diff --check
+git diff
+```
+
+### Una advertencia importante
+
+El patch **no activa automáticamente `authEnabled`** en tu configuración persistente. Eso es deliberado. Primero quiero que compilemos y comprobemos que:
+
+```text
+Emisor
+  ↓
+HMAC 8 bytes
+  ↓
+UDP
+  ↓
+Central
+  ↓
+verificación HMAC
+  ↓
+ACK HMAC
+  ↓
+Emisor
+```
+
+funciona correctamente.
+
+Tu código actual ya tiene `IoTAuth` en el emisor y central, pero la firma está aplicada manualmente solamente al `STATE_REPORT`; `EVENT`, `HELLO` y `HEARTBEAT` no pasan por `signPacket()`. Este patch mueve la responsabilidad al `IoTNode`, que es el lugar correcto para evitar que en el futuro agreguemos otro tipo de mensaje y olvidemos firmarlo.
+
+También aproveché el `boot_count` que ya existe en `IoTStorage`; actualmente `getBootId()` incrementa y persiste ese contador, pero `IoTNode` no lo estaba utilizando.
