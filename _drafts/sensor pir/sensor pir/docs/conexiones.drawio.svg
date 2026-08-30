@@ -1,0 +1,131 @@
+<svg host="65bd71144e" xmlns="http://www.w3.org/2000/svg" style="background: transparent; background-color: transparent;" xmlns:xlink="http://www.w3.org/1999/xlink" version="1.1" width="481px" height="202px" viewBox="-0.5 -0.5 481 202" content="&lt;mxfile&gt;&lt;diagram id=&quot;CtwqTYtnW0bl-uSpKy8g&quot; name=&quot;Página-1&quot;&gt;xZddk5owFIZ/DTPtxc4QAgiXirrbmXY7U3e311lyBKaRODGu2l/fIOGrwXZbFb1A8iaH5H1yOBMsHK3294Ks0y+cArMcm+4tPLUcB7murf4K5VAqLh6VQiIyqgc1wiL7CVrUcck2o7DpDJScM5mtu2LM8xxi2dGIEHzXHbbkrDvrmiRgCIuYMFP9nlGZlmrgjBr9AbIkrWZGflj2rEg1WDvZpITyXUvCMwtHgnNZ3q32EbACXsWljJuf6K0XJiCX7wlwyoA3wrba21jQbZZzJT4X1+Mi5aFyLvg2p1AEIwtPlhljEWdcHDsxJRAsY6VvpOA/oNXjxwG8LosInsuFfhyq2uX+Ile19XJASNiftIRqUCrDgK9AioMaogOwrdnq5EKebu+arUK+1tLWNjlVINHpkdTPbgiqGw2xHyg2gHovBkVlTs05ISxLcqUwWMpLefe63kem937r5zt3Def3j9PbWa+LxQDWPcP6tGh/+PT4ZH+8IYKezA+vhMA3ESBcMPg8m94SQTgcgpGB4CG6W3zzbPSPZdSDgLp9ZTRwXrHvD1NG75x3lFG3B2UtnsMyMFi+RNFwaRT85r2njPZZv0QWhbcto2HXeV8VvZbzaqqW9a/PTwNu+t+rJ/auZB0Z1nuODUDVKVQ3uZApT3hO2KxRzYoxn9vqpyvEKb1dScpJi5n+TFEtjG9FDJ3XVRKRgGwdhEzWAhiR2Vv36WehM4+wfS/Mf7Cz7YsyCk1G7lCMzFPpBqwIWxNE2GVQjcd9adbRz0dYVYg2Q+86DFWz+Qo79rW+ZfHsFw==&lt;/diagram&gt;&lt;/mxfile&gt;">
+    <defs/>
+    <g>
+        <g>
+            <rect x="320" y="0" width="160" height="200" rx="24" ry="24" fill="#dae8fc" stroke="#6c8ebf" pointer-events="all" style="fill: light-dark(rgb(218, 232, 252), rgb(29, 41, 59)); stroke: light-dark(rgb(108, 142, 191), rgb(92, 121, 163));"/>
+        </g>
+        <g>
+            <g fill="#000000" font-family="&quot;Helvetica&quot;" font-weight="bold" text-anchor="middle" font-size="14px" style="fill: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));">
+                <text x="399.5" y="105.5">
+                    Arduino Uno
+                </text>
+            </g>
+        </g>
+        <g>
+            <rect x="325" y="20" width="60" height="20" fill="none" stroke="none" pointer-events="all"/>
+        </g>
+        <g>
+            <g fill="#000000" font-family="&quot;Helvetica&quot;" font-size="12px" style="fill: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));">
+                <text x="326.5" y="37.5">
+                    5V
+                </text>
+            </g>
+        </g>
+        <g>
+            <rect x="325" y="60" width="60" height="20" fill="none" stroke="none" pointer-events="all"/>
+        </g>
+        <g>
+            <g fill="#000000" font-family="&quot;Helvetica&quot;" font-size="12px" style="fill: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));">
+                <text x="326.5" y="77.5">
+                    GND
+                </text>
+            </g>
+        </g>
+        <g>
+            <rect x="325" y="100" width="90" height="20" fill="none" stroke="none" pointer-events="all"/>
+        </g>
+        <g>
+            <g fill="#000000" font-family="&quot;Helvetica&quot;" font-size="12px" style="fill: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));">
+                <text x="326.5" y="117.5">
+                    D2 (INT0)
+                </text>
+            </g>
+        </g>
+        <g>
+            <rect x="325" y="140" width="90" height="20" fill="none" stroke="none" pointer-events="all"/>
+        </g>
+        <g>
+            <g fill="#000000" font-family="&quot;Helvetica&quot;" font-size="12px" style="fill: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));">
+                <text x="326.5" y="157.5">
+                    D13 (LED)
+                </text>
+            </g>
+        </g>
+        <g>
+            <rect x="0" y="0" width="140" height="140" rx="21" ry="21" fill="#d5e8d4" stroke="#82b366" pointer-events="all" style="fill: light-dark(rgb(213, 232, 212), rgb(31, 47, 30)); stroke: light-dark(rgb(130, 179, 102), rgb(68, 110, 44));"/>
+        </g>
+        <g>
+            <g fill="#000000" font-family="&quot;Helvetica&quot;" font-weight="bold" text-anchor="middle" font-size="14px" style="fill: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));">
+                <text x="69.5" y="75.5">
+                    HC-SR501
+                </text>
+            </g>
+        </g>
+        <g>
+            <rect x="100" y="20" width="40" height="20" fill="none" stroke="none" pointer-events="all"/>
+        </g>
+        <g>
+            <g fill="#000000" font-family="&quot;Helvetica&quot;" font-size="12px" style="fill: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));">
+                <text x="101.5" y="37.5">
+                    VCC
+                </text>
+            </g>
+        </g>
+        <g>
+            <rect x="110" y="60" width="40" height="20" fill="none" stroke="none" pointer-events="all"/>
+        </g>
+        <g>
+            <g fill="#000000" font-family="&quot;Helvetica&quot;" font-size="12px" style="fill: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));">
+                <text x="111.5" y="77.5">
+                    GND
+                </text>
+            </g>
+        </g>
+        <g>
+            <rect x="105" y="100" width="35" height="20" fill="none" stroke="none" pointer-events="all"/>
+        </g>
+        <g>
+            <g fill="#000000" font-family="&quot;Helvetica&quot;" font-size="12px" style="fill: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));">
+                <text x="106.5" y="117.5">
+                    OUT
+                </text>
+            </g>
+        </g>
+        <g>
+            <path d="M 140 30 L 318.63 30" fill="none" stroke="#ff0000" stroke-miterlimit="10" pointer-events="stroke" style="stroke: light-dark(rgb(255, 0, 0), rgb(255, 144, 144));"/>
+            <path d="M 323.88 30 L 316.88 33.5 L 318.63 30 L 316.88 26.5 Z" fill="#ff0000" stroke="#ff0000" stroke-miterlimit="10" pointer-events="all" style="fill: light-dark(rgb(255, 0, 0), rgb(255, 144, 144)); stroke: light-dark(rgb(255, 0, 0), rgb(255, 144, 144));"/>
+        </g>
+        <g>
+            <g fill="#FF0000" font-family="&quot;Helvetica&quot;" font-weight="bold" text-anchor="middle" font-size="11px" style="fill: light-dark(rgb(255, 0, 0), rgb(255, 144, 144));">
+                <rect fill="#ffffff" stroke="none" x="225" y="24" width="15" height="14" stroke-width="0" style="fill: light-dark(#ffffff, var(--ge-dark-color, #121212));"/>
+                <text x="231.91" y="34">
+                    5V
+                </text>
+            </g>
+        </g>
+        <g>
+            <path d="M 150 70 L 318.63 70" fill="none" stroke="#000000" stroke-miterlimit="10" pointer-events="stroke" style="stroke: light-dark(rgb(0, 0, 0), rgb(237, 237, 237));"/>
+            <path d="M 323.88 70 L 316.88 73.5 L 318.63 70 L 316.88 66.5 Z" fill="#000000" stroke="#000000" stroke-miterlimit="10" pointer-events="all" style="fill: light-dark(rgb(0, 0, 0), rgb(237, 237, 237)); stroke: light-dark(rgb(0, 0, 0), rgb(237, 237, 237));"/>
+        </g>
+        <g>
+            <g fill="#000000" font-family="&quot;Helvetica&quot;" font-weight="bold" text-anchor="middle" font-size="11px" style="fill: light-dark(rgb(0, 0, 0), rgb(255, 255, 255));">
+                <rect fill="#ffffff" stroke="none" x="225" y="64" width="26" height="14" stroke-width="0" style="fill: light-dark(#ffffff, var(--ge-dark-color, #121212));"/>
+                <text x="237.09" y="74">
+                    GND
+                </text>
+            </g>
+        </g>
+        <g>
+            <path d="M 140 110 L 318.63 110" fill="none" stroke="#00aa00" stroke-miterlimit="10" pointer-events="stroke" style="stroke: light-dark(rgb(0, 170, 0), rgb(28, 174, 28));"/>
+            <path d="M 323.88 110 L 316.88 113.5 L 318.63 110 L 316.88 106.5 Z" fill="#00aa00" stroke="#00aa00" stroke-miterlimit="10" pointer-events="all" style="fill: light-dark(rgb(0, 170, 0), rgb(28, 174, 28)); stroke: light-dark(rgb(0, 170, 0), rgb(28, 174, 28));"/>
+        </g>
+        <g>
+            <g fill="#00AA00" font-family="&quot;Helvetica&quot;" font-weight="bold" text-anchor="middle" font-size="11px" style="fill: light-dark(rgb(0, 170, 0), rgb(28, 174, 28));">
+                <rect fill="#ffffff" stroke="none" x="218" y="104" width="30" height="14" stroke-width="0" style="fill: light-dark(#ffffff, var(--ge-dark-color, #121212));"/>
+                <text x="231.91" y="114">
+                    señal
+                </text>
+            </g>
+        </g>
+    </g>
+</svg>

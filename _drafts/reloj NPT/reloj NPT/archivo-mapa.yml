@@ -1,0 +1,670 @@
+# Generado por: Archivo-Mapa (Claude)
+# Fecha: 2026-06-18T00:00:00Z
+# Fuente: análisis manual del repositorio compartido en conversación
+---
+nombre: reloj-ntp-nodemcu
+descripcion: >
+  Reloj digital con LCD 16x2 I2C, conectado por WiFi, que sincroniza la hora
+  por NTP y la muestra en dígitos grandes (grilla 3x2 de caracteres personalizados).
+  Compilado con PlatformIO para NodeMCU ESP8266 (ESP-12E).
+version: "1.0.0"
+lenguaje_principal: C++ (Arduino/ESP8266)
+licencia: "MIT (recomendado - agregar archivo LICENSE)"
+fecha_ultima_actualizacion: "2026-06-21"
+
+objetivo_principal: >
+  Mostrar la hora sincronizada por NTP en un LCD 16x2 con dígitos grandes,
+  incluyendo indicadores de estado WiFi/NTP sin bloqueos en el loop principal.
+
+# ============================================================================
+# REQUISITOS HARDWARE (PINES Y LCD ESPECÍFICO)
+# ============================================================================
+requisitos_hardware:
+  microcontrolador_principal: "NodeMCU v2 / ESP8266-12E"
+  
+  pines_utilizados:
+    i2c_sda: "GPIO4 (D2)"
+    i2c_scl: "GPIO5 (D1)"
+    nota: "No se usan más pines GPIO. Otros están disponibles para expansiones."
+  
+  lcd_especifico:
+    modelo: "LCD 16x2 con módulo I2C PCF8574T/A"
+    direccion_i2c: "0x27 (direcciones alternativas: 0x26, 0x25, 0x24)"
+    resolucion: "16 caracteres x 2 líneas"
+    caracteres_personalizados: "8 slots (1-8, CGRAM)"
+    consumo: "~50 mA @ 5V (se alimenta directamente del módulo I2C)"
+    
+  fuente_alimentacion:
+    voltaje_entrada: "5V (USB NodeMCU)"
+    voltaje_logica_esp8266: "3.3V (conversor interno NodeMCU)"
+    voltaje_lcd: "5V (módulo I2C acepta 5V)"
+    consumo_total:
+      con_wifi_activo: "~150-200 mA"
+      modo_idle: "~50-80 mA"
+      sin_wifi: "~30 mA"
+  
+  cable_i2c:
+    tipo: "4 pines: GND, VCC(5V), SDA, SCL"
+    longitud_maxima: "1 metro (recomendado)"
+    resistencias_pull_up: "Típicamente incluidas en módulo I2C"
+
+# ============================================================================
+# HARDWARE Y REQUISITOS FÍSICOS (DETALLE COMPLETO)
+# ============================================================================
+hardware:
+  microcontrolador: "NodeMCU v2 (ESP8266 ESP-12E)"
+  ram_total: "160 KB (SRAM)"
+  memoria_flash: "4 MB"
+  velocidad_clock: "80 MHz (ajustable a 160 MHz)"
+  
+  pantalla:
+    tipo: "LCD 16x2 I2C"
+    direccion_i2c: "0x27"
+    resolucion: "16 columnas x 2 filas"
+    conexion: "I2C (SDA=GPIO4/D2, SCL=GPIO5/D1)"
+    caracteres_personalizados: "8 slots CGRAM (1-8, no usar 0)"
+  
+  consumo_estimado: "~150 mA (wifi activo) / ~50 mA (idle)"
+  voltaje: "3.3V USB o batería"
+
+# ============================================================================
+# FLUJOS PRINCIPALES (WiFi → NTP → Display)
+# ============================================================================
+flujos_principales:
+  diagrama_conceptual: |
+    setup():
+      └── Wire.begin(SDA=GPIO4, SCL=GPIO5)
+      └── display.init() → LCD 16x2 I2C @0x27
+      └── display.initCustomChars() → Cargar 8 segmentos CGRAM
+      └── WiFiManager.begin(SSID, PASSWORD)
+      └── NtpClient global ready (state=IDLE)
+    
+    loop() infinito:
+      1. WiFiManager.update() → FSM conexión WiFi
+      2. if (wifi.isConnected()) NtpClient.begin() → Inicia sincronización
+      3. NtpClient.update() → FSM sincronización NTP
+      4. timekeeping.TimePacked = getLocalTime() cada 200ms
+      5. ui.showTime(hour, minute, colon_visible) → Renderizar dígitos
+      6. ui.showStatus(wifi, synced) → Indicadores W/T/* esquina
+  
+  flujo_detallado_wifi:
+    inicio: "DISCONNECTED"
+    paso_1: "WiFiManager.begin() → estado CONNECTING"
+    paso_2: "WiFi.begin(ssid, password) llamada (no bloqueante)"
+    paso_3: "Evento onStationModeGotIP → estado CONNECTED"
+    paso_4: "Si pierde señal → Evento onStationModeDisconnected → DISCONNECTED"
+    paso_5: "Auto-reconnect cada 30 segundos si está en DISCONNECTED"
+    duracion_tipica: "5-15 segundos (depende red y distancia)"
+    max_intentos: "30 intentos antes de estado FAILED"
+    timeout: "15 segundos desde inicio de conexión"
+  
+  flujo_detallado_ntp:
+    inicio: "IDLE (espera a que WiFi se conecte)"
+    paso_1: "NtpClient.begin() → estado SYNCING"
+    paso_2: "configTime(GMT_OFFSET, DAYLIGHT_OFFSET, NTP_SERVER) en setup()"
+    paso_3: "getLocalTime() consulta cada 500ms hasta obtener fecha válida"
+    paso_4: "Validación: tm_year > 120 (>=2020)"
+    paso_5: "Si falla (max 20 reintentos) → estado FAILED"
+    paso_6: "Resync automático cada 1 HORA si ya está SYNCED"
+    paso_7: "Si falla resync → Reintentos cada 5 minutos"
+    duracion_tipica: "2-5 segundos (después WiFi conectado)"
+    intervalo_resync: "3600000 ms (1 hora)"
+  
+  flujo_detallado_display:
+    frecuencia: "Actualiza cada iteración del loop (sin esperas)"
+    paso_1: "timekeeping.fromSystem() lee hour, minute, second, am_pm"
+    paso_2: "display.drawDigit(0..3) renderiza 4 dígitos grandes (3x2 chars)"
+    paso_3: "display.printBigDigit() usa CGRAM slots 1-8 (nunca 0)"
+    paso_4: "showStatus() muestra: W(wifi) T(time) *(ntp) en posición (13,1)"
+    paso_5: "Dos puntos parpadean cada 500ms (visible/invisible)"
+    paso_6: "AM/PM mostrado en esquina superior derecha"
+    actualizacion_hora: "200 ms (sincronizado con millis())"
+    parpadeo: "500 ms alternancia visible/invisible"
+  
+  transiciones_de_estado_críticas:
+    - desde: "BOOT"
+      evento: "setup() completa"
+      a: "WiFi CONNECTING + Display INIT"
+    
+    - desde: "WiFi DISCONNECTED"
+      evento: "WiFi.begin() + onStationModeGotIP"
+      a: "WiFi CONNECTED"
+      dispara: "NtpClient.begin()"
+    
+    - desde: "NtpClient SYNCING"
+      evento: "getLocalTime() retorna válido"
+      a: "NtpClient SYNCED"
+      duracion: "2-5 segundos típicamente"
+    
+    - desde: "NtpClient SYNCED"
+      evento: "1 hora transcurrida"
+      a: "NtpClient SYNCING (resync automático)"
+    
+    - desde: "NtpClient SYNCED"
+      evento: "WiFi pierde conexión"
+      a: "NtpClient SYNCING (reintento cada 5 min)"
+
+# ============================================================================
+# ARQUITECTURA Y FLUJO PRINCIPAL (ORIGINAL)
+# ============================================================================
+flujo_principal:
+  descripcion: >
+    Máquina de estados no bloqueante con 3 componentes independientes
+    que se actualizan en cada iteración del loop sin delay().
+  
+  componentes:
+    - nombre: "WiFiManager"
+      responsabilidad: "Conectar a red WiFi con auto-reconnect"
+      estados: [DISCONNECTED, CONNECTING, CONNECTED, FAILED]
+      timeout_conexion: "15 segundos"
+      intervalo_reintento: "30 segundos"
+      max_intentos: "30"
+    
+    - nombre: "NtpClient"
+      responsabilidad: "Sincronizar hora con servidor NTP"
+      estados: [IDLE, SYNCING, SYNCED, FAILED]
+      intervalo_resync: "3600000 ms (1 hora)"
+      timeout_sincronizacion: "20 segundos (20 reintentos x 500ms)"
+      intervalo_reintento_fallo: "300000 ms (5 minutos)"
+      max_reintentos: "20"
+    
+    - nombre: "Display"
+      responsabilidad: "Renderizar hora y estado en LCD"
+      frecuencia_actualizacion_hora: "200 ms"
+      frecuencia_parpadeo_dos_puntos: "500 ms"
+      patron_dígitos: "3x2 caracteres personalizados por dígito"
+  
+  secuencia_típica:
+    - "setup(): Inicializar WiFi, LCD, NTP"
+    - "loop() WiFi.update(): Conectar a WiFi (FSM)"
+    - "loop() NTP.update(): Sincronizar hora si WiFi conectado"
+    - "loop() timekeeping: Actualizar hora del sistema cada 200ms"
+    - "loop() ui.showTime(): Renderizar display cada ciclo"
+    - "loop() ui.showStatus(): Indicadores W/T/* en esquina"
+
+# ============================================================================
+# RESTRICCIONES Y LIMITACIONES CRÍTICAS
+# ============================================================================
+limitaciones_criticas:
+  - id: "cgram_slots"
+    descripcion: >
+      Slots de caracteres personalizados: 1-8 válidos, 0 es NUNCA usar.
+      Usar ASCII 32 (espacio) en lugar de 0. Romper esto causa basura visual.
+    impacto: "DISPLAY ROTO"
+    solucion: "Usar display::chars::BLANK = 32 siempre"
+  
+  - id: "secrets_obligatorio"
+    descripcion: >
+      secrets.h DEBE existir antes de compilar. No se sube a Git (.gitignore).
+      Copiar secrets.h.template y completar WiFi SSID/password y zona horaria.
+    impacto: "COMPILACIÓN FALLA"
+    solucion: "cp include/secrets.h.template include/secrets.h && editar"
+  
+  - id: "cpp17_no_cpp20"
+    descripcion: >
+      Toolchain xtensa gcc 10.3 soporta C++17 pero NO inicialización designada
+      (.field = value). TimePacked usa constructor posicional, no designated init.
+    impacto: "COMPILACIÓN FALLA si cambias TimePacked"
+    solucion: "Usar constructores con parámetros posicionales"
+  
+  - id: "memoria_flash_limitada"
+    descripcion: >
+      4 MB flash, con framework+libs consume ~1.2 MB. Cuidado si agregas
+      grandes arrays o strings. Usar PROGMEM para datos constantes.
+    impacto: "COMPILACIÓN FALLA si código > flash disponible"
+    solucion: "Mover datos a PROGMEM, revisar .map tras compilar"
+  
+  - id: "no_blocantes_obligatorio"
+    descripcion: >
+      WiFiManager y NtpClient son FSM no bloqueantes. NO introducir delay()
+      en loop() excepto puntos ya marcados en los .cpp.
+    impacto: "DISPLAY CONGELA, hora no actualiza"
+    solucion: "Usar millis() para timeouts, nunca delay()"
+
+# ============================================================================
+# PROBLEMAS CONOCIDOS Y LIMITACIONES (DOCUMENTACIÓN EXTENDIDA)
+# ============================================================================
+problemas_y_limitaciones:
+  
+  seccion_critica_display:
+    problema_1:
+      nombre: "CGRAM slots (0 es inválido)"
+      descripcion: >
+        Los caracteres personalizados usan slots 1-8. El slot 0 no está cargado
+        y si se usa, muestra caracteres basura/aleatorios en el LCD.
+      severidad: "CRÍTICA"
+      causa: "display::chars::BLANK = 32 (espacio) NO se usaba, se usaba 0"
+      sintoma: "Display muestra caracteres raros/basura en dígitos"
+      fix:
+        linea: "include/display.h"
+        cambio: "Verificar que NEVER se use slot 0 en drawDigit()"
+        validation: "Buscar '0' en DIGITS y reemplazar con 'chars::BLANK'"
+  
+  seccion_compilacion:
+    problema_1:
+      nombre: "secrets.h obligatorio pero no versionado"
+      descripcion: >
+        El archivo secrets.h con credenciales WiFi no se sube a Git.
+        Nuevo usuario/colaborador DEBE copiar secrets.h.template y completar.
+      severidad: "CRÍTICA"
+      causa: "Seguridad - no exponer credenciales en repositorio"
+      sintoma: "error: 'secrets' was not declared in this scope"
+      fix:
+        paso_1: "cp include/secrets.h.template include/secrets.h"
+        paso_2: "Editar: WIFI_SSID, WIFI_PASSWORD, GMT_OFFSET_SEC, NTP_SERVER"
+      ubicacion_archivo: "include/secrets.h (en .gitignore)"
+    
+    problema_2:
+      nombre: "C++17 soportado, C++20 NOT"
+      descripcion: >
+        Toolchain xtensa gcc 10.3 NO soporta inicialización designada (.field = val).
+        TimePacked usa constructor posicional, no puede cambiar a designated init.
+      severidad: "ALTA"
+      causa: "Toolchain de ESP8266 tiene limitaciones"
+      sintoma: "error: expected primary-expression before '.' token"
+      fix:
+        incorrecto: "TimePacked t = {.hour = 10, .minute = 30}"
+        correcto: "TimePacked t = {10, 30, 0, false}"
+        linea_referencia: "include/timekeeping.h"
+  
+  seccion_memoria:
+    problema_1:
+      nombre: "Flash limitado (4 MB total, ~1.2 MB framework)"
+      descripcion: >
+        Espacio disponible: ~2.8 MB. Con código + LiquidCrystal_I2C consume ~1-1.5 MB.
+        Agregar features grandes (SPIFFS, OTA, etc.) puede exceder límite.
+      severidad: "MEDIA"
+      causa: "ESP8266 tiene memoria flash limitada"
+      sintoma: "error: section `.text' will not fit in region `irom0_0_seg'"
+      fix:
+        - "Revisar .map tras compilar: platformio run 2>&1 | tail -50"
+        - "Usar PROGMEM para datos grandes (strings, arrays)"
+        - "Compilar con -Os (optimización tamaño)"
+      status_actual: "OK con release build"
+    
+    problema_2:
+      nombre: "Heap fragmentación en WiFi/NTP"
+      descripcion: >
+        Después de muchas conexiones WiFi/NTP, heap puede fragmentarse.
+        No hay monitoreo de fragmentación ni garbage collection explícita.
+      severidad: "BAJA"
+      causa: "SDK WiFi asigna/libera memory dinámicamente"
+      sintoma: "Fallos aleatorios, conectividad intermitente tras horas"
+      fix:
+        - "Agregar monitoreo: Serial.print(ESP.getFreeHeap())"
+        - "Reiniciar periódicamente si heap < 10 KB (no implementado)"
+  
+  seccion_wifi:
+    problema_1:
+      nombre: "Reconexión sin exponential backoff"
+      descripcion: >
+        Si WiFi cae, reintenta conexión cada 30 segundos sin aumento de tiempo.
+        Esto puede generar trancas si hay problemas de red recurrentes.
+      severidad: "MEDIA"
+      causa: "Estrategia simple de retry en WiFiManager"
+      sintoma: "Si WiFi es inestable, debug muestra 30-30-30s siempre"
+      impacto: "Consumo energético, interferencia"
+      fix:
+        "Implementar backoff: 30s -> 60s -> 120s -> 300s"
+    
+    problema_2:
+      nombre: "Sin WDT (Watchdog Timer)"
+      descripcion: >
+        Si el código se cuelga en loop(), no hay reinicio automático.
+        El reloj se queda congelado indefinidamente.
+      severidad: "ALTA"
+      causa: "WDT no habilitado en setup()"
+      sintoma: "Reloj congela, display no cambia, serial desconectado"
+      impacto: "Reloj inutilizable hasta reset manual"
+      fix:
+        agregado_linea: "setup() → ESP.wdtEnable(WDTO_8S)"
+        efecto: "Reinicia automático si loop() tarda > 8s"
+  
+  seccion_ntp:
+    problema_1:
+      nombre: "Sin detección de sincronización perdida"
+      descripcion: >
+        Si NTP falla permanentemente (servidor caído, DNS resuelto incorrecto),
+        el display sigue mostrando hora anticuada sin indicación clara.
+      severidad: "MEDIA"
+      causa: "showStatus() no diferencia entre SYNCED y FAILED visualmente"
+      sintoma: "Hora anticuada mostrada, usuario cree que está sincronizado"
+      fix:
+        - "Agregar indicador 'NO SYNC' si NTP FAILED"
+        - "Cambiar estado display: mostrar animación si desincronizado"
+  
+  seccion_configuracion:
+    problema_1:
+      nombre: "Zona horaria hardcoded en compile-time"
+      descripcion: >
+        GMT_OFFSET_SEC y DAYLIGHT_OFFSET_SEC están en secrets.h.
+        No se puede cambiar zona horaria en runtime sin recompilar.
+      severidad: "BAJA"
+      causa: "Arquitectura actual no soporta EEPROM/SPIFFS para config"
+      sintoma: "Viajes o cambios de zona = recompilación necesaria"
+      fix:
+        - "Agregar SPIFFS para guardar zona horaria"
+        - "Implementar menú con botones para cambiar zona"
+        - "Guardar en LittleFS y cargar en setup()"
+    
+    problema_2:
+      nombre: "Credenciales WiFi no persistentes"
+      descripcion: >
+        SSID y password en secrets.h. Sin forma de cambiarlos sin recompilar.
+        Ideal para producción: usar WiFiManager con portal cautivo (aprox +10KB flash).
+      severidad: "BAJA"
+      causa: "Feature scope del proyecto original"
+      sintoma: "Cambiar WiFi = recompilación + upload + reset"
+      fix:
+        "Agregar modo WPS o Smart Config para provisioning"
+
+# ============================================================================
+# DETALLES DE COMPILACIÓN Y BUILD
+# ============================================================================
+compilacion:
+  estandar: "C++17"
+  optimizacion: "-Os (size optimize)"
+  flags_compilacion:
+    - "-std=c++17"
+    - "-Os"
+    - "-Wall"
+    - "-Wextra"
+    - "-fno-exceptions"
+    - "-DPIO_FRAMEWORK_ARDUINO_LWIP2_LOW_MEMORY"
+  
+  sistema_archivos: "LittleFS"
+  velocidad_upload: "921600 baud"
+  velocidad_monitor: "115200 baud"
+  
+  tamaño_binario_estimado: "~200-250 KB (release build)"
+  uso_ram_estimado: "~40-60 KB en runtime"
+
+# ============================================================================
+# PROBLEMAS CONOCIDOS Y ÁREAS FRÁGILES
+# ============================================================================
+problemas_conocidos:
+  - id: "reconexion_lenta_wifi"
+    descripcion: "Si WiFi cae, reintenta cada 30s. Sin exponential backoff."
+    severidad: "MEDIA"
+    workaround: "Implementar backoff progresivo si hay desconexiones frecuentes"
+  
+  - id: "sin_watchdog"
+    descripcion: "Sin WDT (Watchdog Timer). Si el código se cuelga, no reinicia."
+    severidad: "ALTA"
+    workaround: "Agregar ESP.wdtEnable(WDTO_8S) en setup()"
+  
+  - id: "credenciales_en_ram"
+    descripcion: "WiFi SSID/password en RAM. Sin almacenamiento persistente."
+    severidad: "MEDIA"
+    workaround: "Usar SPIFFS/LittleFS + menú de configuración interactivo"
+  
+  - id: "zona_horaria_hardcoded"
+    descripcion: "Zona horaria fija en secrets.h. No se puede cambiar en tiempo real."
+    severidad: "BAJA"
+    workaround: "Agregar botones para cambiar zona horaria + persistencia SPIFFS"
+  
+  - id: "sin_manejo_error_ntp_permanente"
+    descripcion: >
+      Si NTP falla permanentemente, display sigue mostrando hora anticuada.
+      No hay indicador de 'RELOJ NO SINCRONIZADO' claro.
+    severidad: "MEDIA"
+    workaround: "Mostrar 'NO SYNC' en display si NTP falló"
+  
+  - id: "test_folder_vacía"
+    descripcion: "Carpeta test/ sin tests unitarios. Sin CI/CD."
+    severidad: "BAJA"
+    workaround: "Agregar tests con PlatformIO test framework"
+
+# ============================================================================
+# MÉTRICAS Y RENDIMIENTO
+# ============================================================================
+metricas:
+  tiempo_boot:
+    descripcion: "Desde reset hasta LCD mostrando hora"
+    valor_estimado: "2-3 segundos"
+  
+  tiempo_conexion_wifi:
+    descripcion: "Desde que inicia hasta WiFi CONNECTED"
+    valor_estimado: "5-15 segundos (depende red)"
+  
+  tiempo_sincronizacion_ntp:
+    descripcion: "Desde WiFi CONNECTED hasta NTP SYNCED"
+    valor_estimado: "2-5 segundos (depende servidor NTP)"
+  
+  jitter_pantalla:
+    descripcion: "Variación visual en actualización de display"
+    valor_estimado: "±200 ms (depende de carga WiFi/NTP)"
+  
+  consumo_memoria_dinamica:
+    descripcion: "Heap usado en runtime"
+    valor_estimado: "~15-20 KB"
+
+objetivo_principal: >
+  Mostrar la hora sincronizada por NTP en un LCD 16x2 con dígitos grandes,
+  incluyendo indicadores de estado WiFi/NTP sin bloqueos en el loop principal.
+
+estructura:
+  - ruta: include
+    tipo: carpeta
+    descripcion: Headers del proyecto (declaraciones, constantes, lógica inline)
+    propietario: null
+    tags: [backend]
+
+  - ruta: include/hw.h
+    tipo: archivo
+    descripcion: Pines GPIO y constantes del LCD (SDA, SCL, dirección I2C, cols, rows)
+    propietario: null
+    tags: [config, backend]
+
+  - ruta: include/log.h
+    tipo: archivo
+    descripcion: Macros de logging condicional (LOG, LOGLN, LOGF); se activan con #define DEBUG_LOG
+    propietario: null
+    tags: [backend]
+
+  - ruta: include/display.h
+    tipo: archivo
+    descripcion: >
+      Header-only. Patrones de segmentos en PROGMEM, tabla de dígitos grandes,
+      objeto lcd global (inline C++17), initCustomChars() y printBigDigit().
+      Los slots CGRAM van de 1 a 8; el código 0 nunca se usa (mostraría basura).
+    propietario: null
+    tags: [backend]
+
+  - ruta: include/timekeeping.h
+    tipo: archivo
+    descripcion: >
+      Struct TimePacked con bitfields (hora/minuto/segundo/am — máximo 3 bytes).
+      fromSystem() lee getLocalTime() y devuelve formato 12h con AM/PM.
+    propietario: null
+    tags: [backend]
+
+  - ruta: include/WiFiManager.h
+    tipo: archivo
+    descripcion: >
+      Declaración de la clase WiFiManager: FSM no bloqueante con estados
+      DISCONNECTED, CONNECTING, CONNECTED, FAILED. Auto-reconnect vía SDK.
+    propietario: null
+    tags: [backend]
+
+  - ruta: include/NtpClient.h
+    tipo: archivo
+    descripcion: >
+      Declaración de NtpClient: FSM no bloqueante con resync cada 1 hora
+      y reintento tras fallo cada 5 minutos.
+    propietario: null
+    tags: [backend]
+
+  - ruta: include/ui.h
+    tipo: archivo
+    descripcion: >
+      Header-only. showTime() dibuja los 4 dígitos grandes + AM/PM + dos puntos.
+      showStatus() muestra indicadores W/T/* en columnas 13-15 fila 1.
+    propietario: null
+    tags: [backend]
+
+  - ruta: include/secrets.h
+    tipo: archivo
+    descripcion: >
+      Credenciales WiFi (SSID, password) y config NTP (GMT offset, servidor).
+      NO se sube a Git (.gitignore). Copiar desde secrets.h.template.
+    propietario: null
+    tags: [config]
+
+  - ruta: include/secrets.h.template
+    tipo: archivo
+    descripcion: Plantilla pública de secrets.h. Sí se sube a Git como referencia.
+    propietario: null
+    tags: [config, docs]
+
+  - ruta: src
+    tipo: carpeta
+    descripcion: Implementaciones (.cpp) y punto de entrada
+    propietario: null
+    tags: [backend]
+
+  - ruta: src/main.cpp
+    tipo: archivo
+    descripcion: setup() y loop(). Conecta WiFiManager, NtpClient, timekeeping y ui.
+    propietario: null
+    tags: [backend]
+
+  - ruta: src/WiFiManager.cpp
+    tipo: archivo
+    descripcion: >
+      Implementación de WiFiManager. Usa callbacks onStationModeGotIP /
+      onStationModeDisconnected. Contiene delay() permitido solo en la
+      transición CONNECTING→CONNECTED (marcado como excepción).
+    propietario: null
+    tags: [backend]
+
+  - ruta: src/NtpClient.cpp
+    tipo: archivo
+    descripcion: >
+      Implementación de NtpClient. Llama configTime() en begin() y verifica
+      getLocalTime() en cada tick de SYNCING. Sin delay() salvo los ya existentes.
+    propietario: null
+    tags: [backend]
+
+  - ruta: platformio.ini
+    tipo: archivo
+    descripcion: >
+      Configuración de build PlatformIO: board nodemcuv2, framework arduino,
+      C++17, build release, LittleFS, lib_deps con LiquidCrystal_I2C.
+    propietario: null
+    tags: [config]
+
+  - ruta: .gitignore
+    tipo: archivo
+    descripcion: Excluye .pio/, .vscode/, binarios y secrets.h (credenciales).
+    propietario: null
+    tags: [config]
+
+puntos_entrada:
+  - src/main.cpp
+
+dependencias_clave:
+  - nombre: marcoschwartz/LiquidCrystal_I2C
+    version: "^1.1.4"
+    fuente: platformio.ini
+  - nombre: ESP8266WiFi
+    version: "1.0 (built-in framework)"
+    fuente: framework-arduinoespressif8266
+  - nombre: Wire
+    version: "1.0 (built-in framework)"
+    fuente: framework-arduinoespressif8266
+
+comandos_importantes:
+  - nombre: build
+    comando: platformio run
+  - nombre: upload
+    comando: platformio run --target upload
+  - nombre: monitor
+    comando: platformio device monitor --baud 115200
+  - nombre: build_and_upload
+    comando: platformio run --target upload && platformio device monitor
+
+# ============================================================================
+# GUÍA RÁPIDA DE SETUP
+# ============================================================================
+setup_inicial:
+  paso_1: "git clone <repo> && cd reloj-ntp-nodemcu"
+  paso_2: "cp include/secrets.h.template include/secrets.h"
+  paso_3: "Editar include/secrets.h: agregar WiFi SSID, password, zona horaria"
+  paso_4: "platformio run --target upload"
+  paso_5: "platformio device monitor --baud 115200"
+  esperado: "LCD muestra 'Iniciando reloj' → 'Sincronizando hora (NTP)...' → HH:MM"
+
+variables_entorno:
+  DEBUG_LOG: "Definir en platformio.ini para activar logs (comentar para release)"
+  WIFI_SSID: "En include/secrets.h (cadena_t)"
+  WIFI_PASSWORD: "En include/secrets.h (cadena_t)"
+  GMT_OFFSET_SEC: "En include/secrets.h (segundos. ej: 3600 para UTC+1)"
+  DAYLIGHT_OFFSET_SEC: "En include/secrets.h (segundos DST)"
+  NTP_SERVER: "En include/secrets.h (URL del servidor, ej: 'pool.ntp.org')"
+
+# ============================================================================
+# GUÍA DE DEPURACIÓN
+# ============================================================================
+debugging:
+  puerto_serial: "COM3 a 115200 baud (ajustar según tu puerto USB)"
+  habilitar_logs: "Descomentar #define DEBUG_LOG en platformio.ini"
+  
+  sintomas_comunes:
+    display_muestra_basura:
+      causa: "Slots CGRAM (0) usados incorrectamente"
+      solucion: "Revisar display.h:drawDigit(), usar chars::BLANK"
+    
+    no_conecta_wifi:
+      causa: "SSID/password incorrecto, WiFi fuera de rango"
+      solucion: "Revisar secrets.h, revisar logs seriales"
+    
+    hora_no_sincroniza:
+      causa: "WiFi no conectado, servidor NTP caído, puerto UDP 123 bloqueado"
+      solucion: "Revisar WiFi, probar otro NTP server, revisar firewall"
+    
+    display_congelado:
+      causa: "delay() en loop(), FSM bloqueada"
+      solucion: "Revisar millis() vs delay(), usar timeline no bloqueante"
+    
+    compilacion_falla:
+      causa: "secrets.h falta, C++20 features en código, memoria insuficiente"
+      solucion: "Copiar secrets.h.template, revisar -std=c++17, reducir código"
+
+# ============================================================================
+# CHANGELOG Y HISTORIAL TÉCNICO
+# ============================================================================
+cambios_recientes:
+  - version: "1.0.0"
+    fecha: "2026-06-21"
+    cambios:
+      - "Arquitectura refactorizada: WiFiManager, NtpClient, Display separados"
+      - "FSM no bloqueante para WiFi + NTP"
+      - "Dígitos grandes con caracteres personalizados"
+      - "Indicadores W/T/* de estado en esquina"
+      - "Soporte para zona horaria configurable"
+
+# ============================================================================
+# REFERENCIAS Y ENLACES ÚTILES
+# ============================================================================
+referencias:
+  - nombre: "LiquidCrystal_I2C"
+    url: "https://github.com/marcoschwartz/LiquidCrystal_I2C"
+  
+  - nombre: "ESP8266 Arduino Core"
+    url: "https://github.com/esp8266/Arduino"
+  
+  - nombre: "Documentación NTP"
+    url: "https://tools.ietf.org/html/rfc5905"
+  
+  - nombre: "NodeMCU Pinout"
+    url: "https://nodemcu.readthedocs.io/en/release/modules/"
+
+notas: >
+  RECUERDA: Este archivo es contexto para LLMs. Actualízalo cuando hagas cambios
+  importantes en arquitectura, limitaciones o problemas conocidos. Usar como
+  referencia antes de hacer cambios grandes.
+
+generado_por: "Archivo-Mapa (Claude Haiku 4.5)"
+fecha_generacion: "2026-06-21T00:00:00Z"
+actualizado_por: "Usuario (mejoras técnicas)"
