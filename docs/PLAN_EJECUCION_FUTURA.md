@@ -1423,3 +1423,168 @@ El proyecto no debe declararse estabilizado hasta cumplir estos criterios:
 13. Toda decisión de V5 se basa en una comparación, no en una preferencia previa.
 
 La siguiente LLM debe preferir una implementación pequeña, verificable y reversible antes que una reescritura amplia. Si el código actual contradice este plan, debe informar la discrepancia, leer el código, ajustar el plan con evidencia y no inventar que la fase ya fue completada.
+
+
+
+---
+
+## 13. Segunda auditoría histórica con `unificador-skill`
+
+**Fecha de auditoría:** 2026-08-30
+**Objetivo:** comprobar que este plan no perdió información relevante de los 11 drafts históricos eliminados del árbol de trabajo.
+
+Los drafts fueron recuperados desde el commit padre mediante un worktree temporal de solo lectura. No se aplicó ningún patch, no se modificó el firmware y no se ejecutaron compilaciones ni pruebas hardware durante esta auditoría.
+
+### 13.1 ANÁLISIS PREVIO DE FRAGMENTOS
+
+```text
+Material recibido: 11 archivos históricos en _drafts/
+Tamaño: 6.179 líneas y 128.633 bytes; conjunto largo (>30K)
+Fuentes: notas técnicas, diagnósticos, meta-prompts, instrucciones y patch de seguridad
+Documento canónico comparado: este archivo, 1.425 líneas antes de esta auditoría
+Tema central: preservar V3.5.1, estabilizar V4.3 y decidir posteriormente una arquitectura V5
+
+Duplicaciones detectadas:
+- BUGS_FIXED.md y bugs.md repiten BUG-001..BUG-010 y amplían BUG-011.
+- ideas.md, prodoco.md, prompt.md y prompt2.md repiten la visión de V5,
+  perfiles, transportes y seguridad.
+- META_PROMPT.md, plantilla de prompt.md, prompt.md y prompt2.md son variantes
+  de meta-proceso.
+- instrucciones.md y v4.3.1-security.patch describen el mismo cambio de seguridad.
+- 1mejoras.md duplica la propuesta de la sirena de la Fase 8.
+
+Contradicciones detectadas:
+- BUGS_FIXED.md declara BOOT_ID y auth resueltos; el código y este plan los marcan pendientes.
+- El patch pasa HMAC de 4 a 8 bytes pero conserva nombres HMAC4 y no define compatibilidad.
+- El patch rechaza secuencias no crecientes; este plan exige decidir si UDP debe aceptar
+  paquetes fuera de orden mediante una ventana.
+- bugs.md presenta B622/DMZ e IPs concretas como hechos; este plan las considera hipótesis
+  externas no verificadas.
+- instrucciones.md propone commit/push y aplicación del patch; este plan exige revisión,
+  pruebas y aprobación antes de publicar.
+- El patch contiene fences Markdown e índices 0000000, por lo que no es un diff aplicable.
+
+Brechas encontradas:
+- No hay resultados de compilación, tests host, pruebas hardware ni métricas de loop.
+- No hay evidencia de retained MQTT/Home Assistant verificado.
+- No hay auditoría histórica real de secretos.
+- No hay base de commit válida para aplicar el patch.
+- Falta cerrar la rotación/provisión de claves, el fallback de LittleFS, la política de ACK
+  para paquetes inválidos y la semántica de interrupción/reinicio de la sirena.
+
+Valores que deben parametrizarse o confirmarse:
+- Duraciones 4.000/200/200/500 ms.
+- HMAC de 4 u 8 bytes.
+- UDP 4210 y MQTT 1883.
+- IPs 192.168.0.200, 192.168.0.201, 192.168.0.15 y 192.168.1.200.
+- Firewall 1024-65535.
+- IDs, topics MQTT, nombres de entidades y opciones del simulador.
+
+Orden confirmado:
+V3/línea base → tests host → BOOT_ID → auth antes de efectos → anti-replay
+→ HMAC/compatibilidad → simulador → hardware → sirena V3 → documentación
+→ sensores/relé/OTA/cifrado → evaluación V5.
+
+Acción: consolidación aceptada, sin aplicar el patch ni declarar resueltos los bugs
+que no tengan evidencia en código, compilación o hardware.
+```
+
+### 13.2 Matriz de cobertura por draft
+
+| Draft histórico | Cobertura en este plan | Resultado de la auditoría |
+|---|---|---|
+| `1mejoras.md` | Fase 8 y matriz de trazabilidad | **PARCIAL**: se conserva la sirena no bloqueante y sus decisiones; la auditoría exige mantener comparación segura de `millis()` y no aplicar bloques históricos sin revisar. |
+| `BUGS_FIXED.md` | Sección 4, reglas técnicas y fases 2–5 | **CONTRADICTORIO como estado histórico**: se conservan causas y reglas, pero BUG-008 y BUG-010 siguen pendientes hasta probarse. |
+| `META_PROMPT.md` | Reglas de uso, documentación y checklist | **FUERA DE ALCANCE técnico**: queda representado como disciplina documental, no como evidencia de firmware. |
+| `bugs.md` | BUG-011, Fase 9 y reglas de red | **PARCIAL/CONTRADICTORIO**: el fix `to<JsonObject>()` está cubierto; la topología B622/DMZ queda explícitamente no verificada. |
+| `ideas.md` | Sección 7 y evaluación V5 | **PARCIAL**: seguridad, tests, OTA, capabilities, telemetría y expansión están cubiertos; zonas, máquina de estados ampliada y registro de eventos quedan como backlog pendiente. |
+| `instrucciones.md` | Comandos de validación y aplicación segura de patch | **CONTRADICTORIO como automatismo**: se conserva `git apply --check`, diff y compilación; commit/push requiere revisión humana. |
+| `plantilla de prompt.md` | Principios de no inventar, requisitos y aceptación | **FUERA DE ALCANCE técnico**: no es una decisión específica del proyecto. |
+| `prodoco.md` | Sección 8 sobre V5 | **PARCIAL**: sus interfaces son candidatos, no APIs aprobadas; primero debe compararse con estándares. |
+| `prompt.md` | Fases de auditoría, seguridad, migración y pruebas | **PARCIAL**: se conserva el alcance técnico, pero no se adopta como mandato de crear protocolo propio. |
+| `prompt2.md` | Sección 8 y matriz V5 | **CUBIERTO como alcance**: la investigación debe poder concluir que no conviene un protocolo propio. |
+| `v4.3.1-security.patch` | Fases 2–5 y comandos de patch | **CONTRADICTORIO/NO APLICABLE**: es una propuesta de cambios, no una implementación válida. Debe regenerarse desde el código real. |
+
+### 13.3 Información accionable conservada
+
+El plan conserva la información operativa relevante de los drafts:
+
+- La prohibición de usar `connect()` como prueba rápida en la ruta crítica.
+- La independencia de PIR y TIMBRE, cola asíncrona y drain loop.
+- Las reglas sobre `LOCAL`, PIR sostenido en `HIGH`, OTA y secretos.
+- El fix de ArduinoJson y la necesidad de verificar el payload retained real.
+- BOOT_ID persistente, fallback de LittleFS, auth antes de ACK/deduplicación y anti-replay.
+- La diferencia entre HMAC de cuatro y ocho bytes.
+- La propuesta no bloqueante de la sirena y las decisiones de concurrencia.
+- Tests host, simulador UDP, pruebas hardware, sensores, relé, DHCP, OTA, cifrado y V5.
+- La separación entre propuestas, código aplicado, código compilado y funcionalidad verificada.
+
+### 13.4 Estados permitidos para futuras tareas
+
+A partir de esta auditoría, no usar solamente “resuelto”. Cada tarea debe tener uno de estos estados:
+
+1. **PROPUESTO:** aparece como idea o diseño, pero no está implementado.
+2. **APLICADO:** existe un cambio en el árbol de trabajo.
+3. **COMPILADO:** el cambio aplicado compila en el entorno correspondiente.
+4. **VERIFICADO:** además de compilar, pasó la prueba funcional definida.
+5. **VERIFICADO EN HARDWARE:** la prueba funcional se confirmó en el ESP8266 y entorno real.
+6. **RECHAZADO:** no se adopta, con motivo documentado.
+7. **FUERA DE ALCANCE:** es una plantilla o procedimiento que no forma parte del firmware.
+
+Una entrada histórica, un changelog o un patch nunca demuestra por sí solo los estados `COMPILADO`, `VERIFICADO` o `VERIFICADO EN HARDWARE`.
+
+### 13.5 Decisiones bloqueantes agregadas por la auditoría
+
+Antes de aplicar una futura corrección de seguridad:
+
+- Decidir HMAC de 4 frente a 8 bytes.
+- Si cambia a 8 bytes, renombrar el tag para no conservar un nombre `HMAC4` engañoso.
+- Definir interoperabilidad entre nodos antiguos y nuevos.
+- Elegir orden estricto o ventana anti-replay para UDP; no aceptar silenciosamente una implementación `seq <= lastSeq` como equivalente a una ventana.
+- Definir qué ocurre si LittleFS no monta o el contador está corrupto.
+- Definir si un paquete inválido recibe ACK.
+- Probar el orden de efectos: parseo/CRC → auth → anti-replay → registry → ACK → callback.
+- Regenerar el patch contra un commit real, sin fences Markdown ni índices ficticios.
+
+### 13.6 Verificaciones MQTT y firewall conservadas como procedimientos condicionados
+
+Estos comandos son referencias históricas y deben ejecutarse únicamente con placeholders sustituidos localmente, sin revelar contraseñas:
+
+```bash
+docker run --rm --network host eclipse-mosquitto mosquitto_sub \
+  -h <IP_BROKER> -p 1883 -u <user> -P <pass> \
+  -t 'homeassistant/#' -v --retained-only
+```
+
+La aceptación de BUG-011 requiere comprobar que el payload retained es JSON válido y que Home Assistant registra las entidades; un log de `publish()` no basta.
+
+Reglas históricas para OTA en Windows, solo si se confirma que son necesarias en la red real:
+
+```powershell
+New-NetFirewallRule -DisplayName "PlatformIO OTA" -Direction Inbound -Protocol UDP -LocalPort 1024-65535 -Action Allow
+New-NetFirewallRule -DisplayName "PlatformIO OTA TCP" -Direction Inbound -Protocol TCP -LocalPort 1024-65535 -Action Allow
+```
+
+### 13.7 Backlog explícito pendiente de clasificación
+
+Las siguientes ideas aparecieron en los drafts y no deben considerarse implementadas solo porque estén descritas:
+
+- Máquina de estados de alarma más completa.
+- Zonas de sensores.
+- Registro persistente de eventos.
+- Telemetría y dashboard ampliado.
+- Capabilities genéricas.
+- Profiles de aplicación.
+- Rollback OTA.
+
+Antes de implementarlas, asignar a cada una prioridad, dependencia, archivos afectados, coste de RAM/flash, criterio de aceptación y clasificación: post-V4, V5 o descartada.
+
+### 13.8 Resultado de la comparación
+
+La auditoría no encontró una pérdida crítica de conocimiento técnico en el plan. Sí encontró una necesidad de hacer explícita la trazabilidad histórica y de separar mejor:
+
+```text
+propuesta → aplicada → compilada → verificada → verificada en hardware
+```
+
+Por eso esta sección se incorpora al documento canónico. El patch histórico no se recupera como implementación; queda registrado como propuesta rechazada hasta ser regenerado y validado. La topología B622/DMZ tampoco se convierte en hecho del proyecto.
