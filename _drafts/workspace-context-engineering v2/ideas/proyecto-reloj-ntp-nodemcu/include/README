@@ -1,0 +1,5 @@
+Headers del proyecto. Ver .ai/HARDWARE.md, .ai/SOFTWARE.md y .ai/ARCHITECTURE.md
+para contexto de cada uno antes de modificar.
+
+IMPORTANTE: include/secrets.h NO existe en este repo (está en .gitignore).
+Copiar desde secrets.h.template (raíz del proyecto) antes de compilar.

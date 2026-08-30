@@ -1,0 +1,2 @@
+Librerías privadas específicas de este proyecto (ninguna por ahora — la
+dependencia LiquidCrystal_I2C se resuelve vía lib_deps en platformio.ini).
