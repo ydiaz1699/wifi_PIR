@@ -1567,7 +1567,7 @@ New-NetFirewallRule -DisplayName "PlatformIO OTA TCP" -Direction Inbound -Protoc
 
 ### 13.7 Backlog explícito pendiente de clasificación
 
-Las siguientes ideas aparecieron en los drafts y no deben considerarse implementadas solo porque estén descritas:
+Las siguientes ideas aparecieron en los drafts y se desarrollan con detalle en la sección 14. No deben considerarse implementadas solo porque estén descritas:
 
 - Máquina de estados de alarma más completa.
 - Zonas de sensores.
@@ -1588,3 +1588,1582 @@ propuesta → aplicada → compilada → verificada → verificada en hardware
 ```
 
 Por eso esta sección se incorpora al documento canónico. El patch histórico no se recupera como implementación; queda registrado como propuesta rechazada hasta ser regenerado y validado. La topología B622/DMZ tampoco se convierte en hecho del proyecto.
+
+
+
+---
+
+## 14. Desarrollo detallado de las ideas de mejora
+
+Esta sección conserva el contenido estratégico de `ideas.md` con suficiente detalle para que una LLM futura pueda desarrollar cada idea sin depender de la conversación original ni de los drafts eliminados.
+
+### 14.1 Prioridad general del proyecto
+
+Antes de añadir sensores, dashboards o funciones de conveniencia, el sistema debe seguir esta cadena de madurez:
+
+```text
+¿Puede detectar?
+      ↓
+¿Puede comunicar?
+      ↓
+¿Puede recuperarse de un fallo?
+      ↓
+¿Puede impedir comandos falsos?
+      ↓
+recién entonces → nuevas funciones
+```
+
+Orden estratégico original:
+
+1. Seguridad y confiabilidad.
+2. Estado completo de cada dispositivo.
+3. Registro de eventos.
+4. Máquina de estados de alarma.
+5. Zonas.
+6. Configuración centralizada.
+7. OTA controlado y rollback.
+8. Añadir sensores sin crear protocolos diferentes.
+9. Capabilities.
+10. Watchdog y recuperación.
+11. Telemetría.
+12. Panel de diagnóstico.
+
+Este orden estratégico debe combinarse con el orden técnico de las fases 0–9. Si existe conflicto, no saltar la línea base, los tests o la seguridad para adelantar una función visual.
+
+### 14.2 Regla de clasificación por capa
+
+Antes de implementar cualquier funcionalidad nueva, clasificarla en una o más de estas capas:
+
+```text
+PROTOCOLO
+  Formato de mensajes, TLV, tipos, flags, ACK, versionado y seguridad del wire format.
+
+DISPOSITIVO
+  Lectura de sensores, actuadores, watchdog local, WiFi, almacenamiento y firmware.
+
+CENTRAL
+  Registry, estados, deduplicación, máquina de alarma, zonas, eventos y comandos.
+
+HOME ASSISTANT / MQTT
+  Discovery, topics, entidades, automatizaciones, dashboard y notificaciones.
+```
+
+Una funcionalidad no debe implementarse en la capa equivocada:
+
+- Un sensor nuevo no debe crear un protocolo paralelo si puede usar `IoTProtocol`.
+- Una regla de alarma no debe quedar codificada únicamente en Home Assistant si la sirena local debe continuar funcionando sin MQTT.
+- Un secreto no debe viajar como configuración sin autenticación.
+- Una capacidad del dispositivo debe anunciarse desde el dispositivo/protocolo; la central puede publicarla después a MQTT.
+- Un dashboard no debe convertirse en la fuente de verdad del estado de seguridad.
+
+Cada propuesta futura debe registrar:
+
+```text
+Capa principal:
+Capas secundarias:
+Mensajes afectados:
+Persistencia necesaria:
+Dependencia de MQTT:
+Dependencia de hardware:
+```
+
+---
+
+### 14.3 Idea 1 — Seguridad y confiabilidad primero
+
+**Objetivo:** asegurar que el sistema detecte eventos, los comunique, se recupere de fallos y rechace comandos falsos antes de añadir nuevas funciones.
+
+#### Requisitos
+
+- HMAC para todos los mensajes importantes.
+- Protección contra replay.
+- `BOOT_ID` persistente.
+- Contador `SEQ` robusto.
+- Autenticación obligatoria para comandos.
+- Credenciales fuera del repositorio.
+- OTA protegido.
+- Watchdog para recuperar bloqueos.
+- Recuperación automática de WiFi y MQTT.
+- Registro de eventos importantes.
+
+#### Flujo de confiabilidad
+
+```text
+sensor detecta evento
+      ↓
+emisor genera mensaje
+      ↓
+mensaje firmado y con identidad de sesión
+      ↓
+UDP transmite sin bloquear el loop
+      ↓
+central valida estructura, CRC, auth y anti-replay
+      ↓
+central procesa una sola vez y responde ACK válido
+      ↓
+central activa acción local
+      ↓
+MQTT se publica si está disponible
+      ↓
+si una parte falla, las demás continúan
+```
+
+#### Fallos que deben aislarse
+
+```text
+WiFi perdido
+    ↓
+reintentar sin bloquear la alarma
+
+MQTT perdido
+    ↓
+continuar en modo local y reintentar con backoff
+
+UDP con pérdida
+    ↓
+retransmitir eventos reliable sin bloquear sensores
+
+loop bloqueado
+    ↓
+watchdog
+    ↓
+reinicio
+
+reinicio
+    ↓
+BOOT_ID nuevo
+    ↓
+HELLO/heartbeat
+    ↓
+ONLINE
+```
+
+#### Archivos relacionados
+
+```text
+lib/IoTProtocol/IoTAuth.h
+lib/IoTProtocol/IoTAuth.cpp
+lib/IoTProtocol/IoTNode.h
+lib/IoTProtocol/IoTNode.cpp
+lib/IoTProtocol/IoTStorage.h
+lib/IoTProtocol/IoTStorage.cpp
+emisor_pir_v4/src/main.cpp
+receptor_central_v4/src/main.cpp
+receptor_bocina/src/mqtt_cliente.cpp
+receptor_bocina/src/alarma.cpp
+```
+
+#### Decisiones pendientes
+
+1. Qué mensajes requieren HMAC obligatorio.
+2. Si ACK, HELLO y heartbeat deben firmarse siempre.
+3. Si se usará HMAC truncado de 4 u 8 bytes.
+4. Cómo se rotan y provisionan las claves.
+5. Qué ocurre si LittleFS falla.
+6. Qué nivel de pérdida de MQTT es aceptable.
+7. Cuántos reintentos reliable se permiten.
+8. Cómo se informa un fallo de autenticación sin filtrar datos sensibles.
+
+#### Criterios de aceptación
+
+- Un evento local continúa funcionando aunque MQTT esté apagado.
+- Un paquete con HMAC inválido no produce efectos ni ACK no autorizado.
+- Un replay no activa la alarma.
+- Un reinicio genera una identidad de sesión distinguible.
+- Un fallo de WiFi o MQTT no bloquea el loop principal.
+- El watchdog y la recuperación se prueban con fallos controlados.
+- Las credenciales no aparecen en archivos versionados, logs ni payloads de diagnóstico.
+
+---
+
+### 14.4 Idea 2 — Estado completo de cada dispositivo
+
+**Objetivo:** convertir el registry de `ONLINE / STALE / OFFLINE` en una ficha diagnóstica útil para la central y Home Assistant.
+
+#### Modelo propuesto
+
+```text
+DEVICE
+ ├── ID
+ ├── nombre
+ ├── tipo
+ ├── IP
+ ├── puerto
+ ├── RSSI
+ ├── uptime
+ ├── BOOT_ID
+ ├── último SEQ
+ ├── último heartbeat
+ ├── firmware
+ ├── estado
+ ├── batería
+ ├── errores
+ └── capabilities
+```
+
+#### Significado de los campos
+
+- `ID`: identificador estable del dispositivo dentro de la red IoT.
+- `nombre`: nombre legible anunciado por HELLO o configuración central.
+- `tipo`: PIR, puerta, temperatura, relé u otro tipo registrado.
+- `IP` y `puerto`: endpoint observado por la central; pueden cambiar si se usa DHCP.
+- `RSSI`: calidad de WiFi reportada por el dispositivo.
+- `uptime`: segundos desde el último arranque del dispositivo.
+- `BOOT_ID`: identidad de la sesión actual.
+- `último SEQ`: última secuencia aceptada para ese BOOT_ID.
+- `último heartbeat`: instante local en que se recibió la última señal de vida.
+- `firmware`: versión reportada por HELLO o telemetría.
+- `estado`: `UNKNOWN`, `ONLINE`, `STALE` u `OFFLINE`.
+- `batería`: porcentaje, voltaje o estado de batería si el dispositivo lo soporta.
+- `errores`: contadores estructurados, no texto arbitrario como única fuente.
+- `capabilities`: funciones anunciadas por el dispositivo.
+
+#### Ejemplo de estado legible
+
+```text
+PIR SALA
+ONLINE
+RSSI -58 dBm
+uptime 17 días
+firmware 4.3.1
+último heartbeat: 8 s
+```
+
+#### Flujo de actualización
+
+```text
+HELLO
+  → crear o actualizar ID, nombre, tipo, firmware y capabilities
+
+HEARTBEAT
+  → actualizar RSSI, uptime, heap, último heartbeat y estadísticas
+
+EVENT / DATA / STATE_REPORT
+  → actualizar lastSeen y estado ONLINE
+
+temporizador de la central
+  → ONLINE → STALE → OFFLINE según timeout
+
+cambio de estado
+  → registrar evento
+  → publicar estado retained a MQTT
+```
+
+#### Decisiones pendientes
+
+1. Qué campos pertenecen a `RemoteDevice` y cuáles a una estructura de telemetría separada.
+2. Si el nombre puede ser cambiado remotamente.
+3. Cómo se representa batería cuando un dispositivo no tiene batería.
+4. Qué errores son contadores y cuáles son el último error.
+5. Qué ocurre si cambia la IP pero no cambia el BOOT_ID.
+6. Si el registry se persiste en LittleFS.
+7. Cuánto tiempo se conserva un dispositivo OFFLINE.
+8. Si `lastSeq` se reinicia al cambiar BOOT_ID.
+9. Qué información se publica individualmente y cuál se publica como JSON agregado.
+
+#### Archivos relacionados
+
+```text
+lib/IoTProtocol/IoTNode.h
+lib/IoTProtocol/IoTNode.cpp
+lib/IoTProtocol/IoTProtocol.h
+receptor_central_v4/src/event_handler.cpp
+receptor_central_v4/src/main.cpp
+receptor_central_v4/src/mqtt_manager.cpp
+receptor_central_v4/include/mqtt_manager.h
+```
+
+#### Criterios de aceptación
+
+- La central muestra una ficha completa por dispositivo conocido.
+- HELLO actualiza nombre, tipo, firmware y capabilities.
+- Heartbeat actualiza RSSI, uptime y estadísticas.
+- La transición `ONLINE / STALE / OFFLINE` es reproducible.
+- Un cambio de IP se actualiza sin duplicar el dispositivo.
+- Los datos publicados a MQTT tienen nombres y tipos estables.
+- Un dispositivo sin batería no publica una batería ficticia.
+
+---
+
+### 14.5 Idea 3 — Registro de eventos
+
+**Objetivo:** conservar los últimos eventos para que el sistema sea diagnosticable, no solo observable en tiempo real.
+
+#### Capacidad inicial
+
+Guardar en la central los últimos **100 eventos** mediante un buffer circular:
+
+```text
+16:04:21  PIR_SALA     MOTION
+16:04:21  CENTRAL      ALARM_ON
+16:04:22  MQTT         CONNECTED
+16:05:02  PIR_SALA     HEARTBEAT
+16:06:10  PIR_GARAJE   OFFLINE
+16:06:15  PIR_GARAJE   ONLINE
+```
+
+#### Modelo de evento
+
+```text
+EventLogEntry
+ ├── timestamp o uptime
+ ├── source_id
+ ├── source_name
+ ├── category
+ ├── event_code
+ ├── value o payload pequeño
+ ├── severity
+ ├── boot_id opcional
+ └── sequence opcional
+```
+
+#### Categorías iniciales
+
+```text
+SENSOR_EVENT
+CENTRAL_STATE
+ALARM_STATE
+MQTT_STATE
+WIFI_STATE
+DEVICE_STATE
+SECURITY
+OTA
+SYSTEM_ERROR
+```
+
+#### Flujo
+
+```text
+evento recibido
+      ↓
+validar y clasificar
+      ↓
+insertar en buffer circular de 100 entradas
+      ↓
+si es importante, publicar a MQTT
+      ↓
+si la persistencia está habilitada, guardar por lotes
+      ↓
+Home Assistant consulta o muestra los eventos
+```
+
+#### Persistencia
+
+- La primera versión puede mantener el historial en RAM.
+- La persistencia en LittleFS debe escribirse por lotes, no en cada evento.
+- Debe existir una política de desgaste y recuperación ante archivo corrupto.
+- El timestamp puede ser `millis()`, uptime o tiempo real si existe una fuente confiable.
+- No guardar secretos dentro del registro.
+
+#### Decisiones pendientes
+
+1. Si los 100 eventos sobreviven a un reinicio.
+2. Si el timestamp será RTC, NTP, uptime o una combinación.
+3. Cuánto texto puede contener cada entrada.
+4. Si el registro se publica como JSON, como topics individuales o mediante API.
+5. Qué eventos son `INFO`, `WARNING`, `ERROR` o `CRITICAL`.
+6. Qué eventos deben disparar notificación.
+7. Cómo se consulta desde Home Assistant.
+8. Cuánto flash se reserva.
+9. Cómo se compacta y recupera el archivo.
+
+#### Archivos probables
+
+```text
+receptor_central_v4/include/event_log.h
+receptor_central_v4/src/event_log.cpp
+receptor_bocina/include/event_log.h
+receptor_bocina/src/event_log.cpp
+lib/IoTProtocol/IoTProtocol.h
+receptor_central_v4/src/mqtt_manager.cpp
+```
+
+#### Criterios de aceptación
+
+- Se conservan como máximo 100 eventos sin corromper el buffer.
+- Al insertar el evento 101 se elimina únicamente el más antiguo.
+- Un evento de seguridad incluye origen y contexto suficiente.
+- Los cambios `ONLINE`, `STALE`, `OFFLINE`, MQTT y alarma quedan registrados.
+- El registro no bloquea el procesamiento UDP.
+- El sistema puede mostrar o exportar el historial desde Home Assistant.
+- Un fallo de LittleFS no impide que la alarma local siga funcionando.
+
+---
+
+### 14.6 Idea 4 — Máquina de estados de alarma
+
+**Objetivo:** reemplazar la lógica simplificada de alarma ON/OFF por una máquina de estados explícita y verificable.
+
+#### Estados del ciclo de alarma
+
+```text
+DISARMED
+  ↓
+ARMING
+  ↓
+ARMED
+  ↓
+TRIGGERED
+  ↓
+ALARMING
+  ↓
+ACKNOWLEDGED
+  ↓
+DISARMED
+```
+
+#### Significado de cada estado
+
+- `DISARMED`: la alarma está desactivada. Los sensores pueden seguir reportando eventos, pero no activan la sirena según la política configurada.
+- `ARMING`: se inició el armado y está transcurriendo un tiempo de salida. Durante este periodo puede permitirse que el usuario abandone la zona sin disparar la alarma.
+- `ARMED`: la alarma está armada y los sensores configurados como activos pueden provocar una alarma.
+- `TRIGGERED`: se recibió un evento que cumple las condiciones de disparo, por ejemplo `MOTION`, `DOOR_OPEN`, `SMOKE` o `TAMPER`.
+- `ALARMING`: la central ya ejecutó la acción de alarma: sirena, publicaciones MQTT y notificaciones.
+- `ACKNOWLEDGED`: el evento de alarma fue reconocido por el usuario o por una orden autorizada, pero todavía deben cumplirse las condiciones para regresar a `DISARMED`.
+- `DISARMED`: estado final después del reconocimiento y desarmado.
+
+#### Modos de operación
+
+```text
+DISARMED
+ARM_HOME
+ARM_AWAY
+NIGHT
+ALARM
+MAINTENANCE
+```
+
+Los modos representan la política de funcionamiento, mientras que los estados representan el ciclo de transición de la alarma. No deben mezclarse automáticamente sin decidir primero el modelo.
+
+#### Significado de cada modo
+
+- `DISARMED`: todos los sensores de alarma están desactivados para efectos de disparo.
+- `ARM_HOME`: la casa está ocupada; algunos sensores interiores pueden quedar excluidos y sensores perimetrales permanecen activos.
+- `ARM_AWAY`: todos los sensores configurados quedan activos.
+- `NIGHT`: se activa una combinación específica para horario nocturno, por ejemplo puertas, ventanas y zonas exteriores, dejando inactivos ciertos sensores interiores.
+- `ALARM`: modo de emergencia o condición global de alarma. Debe definirse si es un modo persistente o simplemente un reflejo de `ALARMING`.
+- `MAINTENANCE`: permite pruebas y configuración sin activar la alarma real. Debe requerir autorización y no debe habilitarse accidentalmente desde MQTT.
+
+#### Transiciones iniciales propuestas
+
+```text
+DISARMED
+  └─ comando ARM_HOME/ARM_AWAY/NIGHT
+       → ARMING
+
+ARMING
+  ├─ finaliza el tiempo de salida
+  │    → ARMED
+  └─ comando DISARM
+       → DISARMED
+
+ARMED
+  ├─ evento permitido de sensor
+  │    → TRIGGERED
+  └─ comando DISARM
+       → DISARMED
+
+TRIGGERED
+  └─ procesamiento confirmado del evento
+       → ALARMING
+
+ALARMING
+  ├─ comando ACK autorizado
+  │    → ACKNOWLEDGED
+  └─ nueva condición crítica
+       → ALARMING
+
+ACKNOWLEDGED
+  ├─ comando DISARM autorizado
+  │    → DISARMED
+  └─ condición todavía activa
+       → ALARMING
+
+MAINTENANCE
+  ├─ finaliza la sesión de mantenimiento
+  │    → DISARMED
+  └─ evento de prueba
+       → registrar evento sin activar alarma real
+```
+
+#### Decisiones pendientes
+
+1. Si `ALARM` será un modo separado o un alias de `ALARMING`.
+2. Si `TRIGGERED` y `ALARMING` deben ser estados separados.
+3. Cuánto dura el tiempo de `ARMING`.
+4. Si el tiempo de entrada debe existir antes de pasar de `TRIGGERED` a `ALARMING`.
+5. Qué sensores están activos en `ARM_HOME`.
+6. Qué sensores están activos en `NIGHT`.
+7. Si `ACKNOWLEDGED` apaga inmediatamente la sirena.
+8. Qué sucede si el sensor continúa activo después del reconocimiento.
+9. Qué comandos pueden cambiar el modo.
+10. Cómo se autentican los comandos remotos.
+11. Cómo se persiste el modo después de reiniciar la central.
+12. Qué ocurre si se reinicia la central mientras está en `ALARMING`.
+13. Cómo se publica cada estado a MQTT/Home Assistant.
+14. Qué eventos quedan registrados en el historial.
+15. Qué diferencia hay entre una alarma real y un evento de prueba en `MAINTENANCE`.
+
+#### Archivos que probablemente habría que revisar
+
+```text
+receptor_bocina/include/state_machine.h
+receptor_bocina/src/state_machine.cpp
+receptor_bocina/include/config.h
+receptor_bocina/src/config.cpp
+receptor_bocina/src/alarma.cpp
+receptor_bocina/src/main.cpp
+receptor_bocina/src/mqtt_cliente.cpp
+receptor_bocina/src/mqtt_discovery.cpp
+receptor_central_v4/src/event_handler.cpp
+receptor_central_v4/src/main.cpp
+```
+
+#### Criterios de aceptación
+
+- Cada transición válida está implementada explícitamente.
+- Las transiciones inválidas se rechazan y quedan registradas.
+- `ARM_HOME`, `ARM_AWAY`, `NIGHT` y `MAINTENANCE` tienen políticas diferentes.
+- Un evento de sensor solo dispara alarma si el modo y el estado lo permiten.
+- Un comando MQTT no autenticado no puede armar, desarmar ni reconocer la alarma.
+- La central conserva el estado después de un reinicio según la política decidida.
+- MQTT/Home Assistant refleja el modo y el estado actual.
+- Los cambios de estado quedan en el registro de eventos.
+- Existen pruebas para cada transición y para comandos inválidos.
+
+---
+
+### 14.7 Idea 5 — Zonas de sensores
+
+**Objetivo:** organizar los dispositivos por ubicación y aplicar políticas de armado por zona, en lugar de tratar cada sensor como una entidad aislada.
+
+#### Modelo conceptual
+
+```text
+CASA
+├── Sala
+├── Cocina
+├── Dormitorio
+├── Garaje
+└── Patio
+```
+
+Cada dispositivo debe poder pertenecer a una zona:
+
+```text
+PIR_SALA      → Sala
+PIR_COCINA    → Cocina
+PIR_GARAJE    → Garaje
+PUERTA_PATIO  → Patio
+```
+
+#### Ejemplo de política
+
+```text
+ARM_HOME
+
+Sala       → activa
+Cocina     → activa
+Dormitorio → inactiva
+Garaje     → activa
+```
+
+#### Modelo propuesto
+
+```text
+Zone
+ ├── zone_id
+ ├── name
+ ├── enabled
+ ├── members[]
+ ├── trigger_policy
+ └── notification_policy
+```
+
+```text
+DeviceConfig
+ ├── device_id
+ ├── zone_id
+ ├── enabled
+ ├── priority
+ └── sensor_policy
+```
+
+#### Flujo
+
+```text
+HELLO o configuración remota
+      ↓
+central conoce device_id y zone_id
+      ↓
+se selecciona ARM_HOME/ARM_AWAY/NIGHT
+      ↓
+la central evalúa si la zona está activa
+      ↓
+evento del sensor
+      ├─ zona activa     → puede disparar alarma
+      ├─ zona inactiva   → registrar/publicar sin sirena
+      └─ mantenimiento   → registrar como prueba
+```
+
+#### Decisiones pendientes
+
+1. Si las zonas se configuran únicamente en la central o también en el dispositivo.
+2. Si un dispositivo puede pertenecer a varias zonas.
+3. Qué zona predeterminada recibe un dispositivo nuevo.
+4. Qué ocurre con un sensor sin zona.
+5. Si `ARM_HOME` y `NIGHT` comparten zonas o tienen políticas independientes.
+6. Si una zona deshabilitada sigue reportando eventos.
+7. Cómo se autentica la modificación de zonas.
+8. Cómo se persisten las zonas.
+9. Cómo se publican las zonas a Home Assistant.
+10. Si una zona completa OFFLINE debe producir una alerta especial.
+
+#### Archivos probables
+
+```text
+receptor_central_v4/include/zone_manager.h
+receptor_central_v4/src/zone_manager.cpp
+receptor_central_v4/include/config.h
+receptor_central_v4/src/event_handler.cpp
+receptor_central_v4/src/main.cpp
+receptor_central_v4/src/mqtt_manager.cpp
+receptor_bocina/src/alarma.cpp
+lib/IoTProtocol/IoTConfigHandler.h
+lib/IoTProtocol/IoTConfigHandler.cpp
+```
+
+#### Criterios de aceptación
+
+- Un dispositivo nuevo puede asignarse a una zona sin cambiar el protocolo.
+- `ARM_HOME`, `ARM_AWAY` y `NIGHT` producen políticas diferentes.
+- Un evento de zona inactiva no activa la sirena, pero queda registrado.
+- Un sensor sin zona tiene un comportamiento explícito y documentado.
+- Cambiar una zona requiere autenticación.
+- Las zonas sobreviven al reinicio según la política definida.
+- Home Assistant puede mostrar zonas y su estado.
+
+---
+
+### 14.8 Idea 6 — Configuración centralizada
+
+**Objetivo:** configurar un dispositivo desde la central sin recompilarlo, conservando la configuración después de un reinicio y sin permitir cambios no autenticados.
+
+#### Ejemplo de configuración
+
+```text
+device: PIR_SALA
+
+heartbeat: 30 s
+debounce: 500 ms
+nombre: Sala
+zona: Interior
+prioridad: HIGH
+modo: activo
+```
+
+#### Campos iniciales
+
+```text
+DeviceConfig
+ ├── device_id
+ ├── device_name
+ ├── zone_id
+ ├── heartbeat_interval_ms
+ ├── debounce_ms
+ ├── priority
+ ├── enabled
+ ├── auth_enabled
+ └── config_version
+```
+
+#### Flujo seguro
+
+```text
+usuario autorizado cambia configuración en Home Assistant
+      ↓
+central valida formato y permisos
+      ↓
+central crea CONFIG autenticado con config_version
+      ↓
+dispositivo verifica auth
+      ↓
+dispositivo valida rango y versión
+      ↓
+dispositivo aplica configuración en RAM
+      ↓
+dispositivo guarda en LittleFS
+      ↓
+dispositivo responde ACK/RESPONSE
+      ↓
+central publica resultado
+```
+
+#### Reglas
+
+- La configuración remota nunca puede saltarse autenticación.
+- Validar rangos antes de guardar.
+- Rechazar versiones antiguas o comandos duplicados.
+- Mantener configuración válida anterior si falla la escritura.
+- No permitir que una configuración remota desactive permanentemente el mecanismo de autenticación sin una operación local de recuperación.
+- Registrar quién, cuándo y qué configuración se modificó, sin guardar secretos.
+
+#### Decisiones pendientes
+
+1. Qué campos pueden cambiarse remotamente.
+2. Qué campos requieren reinicio.
+3. Si el nombre y zona son autoridad de la central o del dispositivo.
+4. Si la central espera confirmación de persistencia.
+5. Qué ocurre cuando la versión de configuración no es compatible.
+6. Cómo se revierte una configuración inválida.
+7. Si `auth_enabled` puede cambiarse remotamente.
+8. Cómo se autorizan usuarios de Home Assistant.
+9. Qué tamaño máximo tendrá el mensaje CONFIG.
+
+#### Archivos probables
+
+```text
+lib/IoTProtocol/IoTConfigHandler.h
+lib/IoTProtocol/IoTConfigHandler.cpp
+lib/IoTProtocol/IoTStorage.h
+lib/IoTProtocol/IoTStorage.cpp
+lib/IoTProtocol/IoTProtocol.h
+receptor_central_v4/src/mqtt_manager.cpp
+receptor_central_v4/src/event_handler.cpp
+emisor_pir_v4/src/main.cpp
+```
+
+#### Criterios de aceptación
+
+- Un cambio válido se aplica, persiste y se confirma.
+- Un cambio no autenticado se rechaza.
+- Un valor fuera de rango no se guarda.
+- Una configuración corrupta no deja al dispositivo inutilizable.
+- Un reinicio conserva la configuración válida anterior.
+- La central distingue `sent`, `accepted`, `persisted` y `rejected`.
+- Los cambios aparecen en el registro de eventos.
+
+---
+
+### 14.9 Idea 7 — OTA controlado y rollback
+
+**Objetivo:** actualizar firmware remoto de forma autenticada, verificable y recuperable.
+
+#### Flujo propuesto
+
+```text
+Central detecta firmware nuevo
+      ↓
+verifica versión, hash y compatibilidad
+      ↓
+envía orden OTA autenticada
+      ↓
+dispositivo acepta y prepara actualización
+      ↓
+descarga firmware desde fuente autorizada
+      ↓
+verifica hash y tamaño
+      ↓
+aplica firmware
+      ↓
+reinicia
+      ↓
+BOOT_ID nuevo
+      ↓
+HELLO y heartbeat
+      ↓
+central verifica versión y estado ONLINE
+      ↓
+OK o rollback
+```
+
+#### Estados OTA
+
+```text
+OTA_IDLE
+OTA_REQUESTED
+OTA_AUTHORIZED
+OTA_DOWNLOADING
+OTA_VERIFYING
+OTA_APPLYING
+OTA_REBOOTING
+OTA_CONFIRMED
+OTA_FAILED
+OTA_ROLLBACK
+```
+
+#### Requisitos
+
+- Orden OTA autenticada.
+- Firmware con versión y hash.
+- Compatibilidad de hardware comprobada.
+- Tiempo límite para descarga y confirmación.
+- No activar OTA si la batería o alimentación no son suficientes, si aplica.
+- Confirmación posterior al reinicio.
+- Rollback real o mecanismo físico de recuperación.
+- Registro de versión anterior, nueva versión y resultado.
+
+#### Decisiones pendientes
+
+1. Si la central sirve el firmware por HTTP o usa otro servidor.
+2. Cómo se autentica la descarga, además de verificar hash.
+3. Si se firma el firmware o solo se usa hash.
+4. Qué bootloader/particiones permiten rollback en ESP8266.
+5. Cuánto tiempo tiene el dispositivo para confirmar el arranque.
+6. Qué ocurre si se corta la energía durante OTA.
+7. Si se actualizan todos los nodos o uno por uno.
+8. Cómo se detiene una actualización defectuosa.
+9. Si V3 participa o solo V4.
+10. Qué versiones son compatibles con el wire format.
+
+#### Archivos probables
+
+```text
+receptor_central_v4/src/ota_manager.cpp
+receptor_central_v4/include/ota_manager.h
+emisor_pir_v4/src/ota_client.cpp
+emisor_pir_v4/include/ota_client.h
+lib/IoTProtocol/IoTProtocol.h
+lib/IoTProtocol/IoTAuth.*
+lib/IoTProtocol/IoTStorage.*
+```
+
+#### Criterios de aceptación
+
+- Una orden OTA no autenticada no se ejecuta.
+- Un firmware con hash incorrecto no se instala.
+- Un nodo que reinicia correctamente confirma la actualización.
+- Un nodo que no confirma queda marcado como fallo.
+- El rollback se prueba provocando un firmware inválido o fallo controlado.
+- Una actualización no bloquea permanentemente la alarma local.
+- El historial registra resultado y versiones sin secretos.
+
+---
+
+### 14.10 Idea 8 — Añadir sensores sin modificar el protocolo
+
+**Objetivo:** permitir añadir sensores y actuadores sin crear protocolos diferentes para cada dispositivo.
+
+#### Sensores y eventos previstos
+
+```text
+PIR
+MAGNETICO
+TEMPERATURA
+HUMEDAD
+HUMO
+GAS
+LUZ
+BOTON
+VIBRACION
+```
+
+#### Modelo de mensajes
+
+```text
+EVENT
+ ├── MOTION
+ ├── DOOR_OPEN
+ ├── DOOR_CLOSE
+ ├── SMOKE
+ ├── BUTTON
+ └── TEMPERATURE
+```
+
+Los datos continuos, como temperatura y humedad, pueden usar `DATA` con TLV específicos. Los cambios críticos, como puerta abierta, humo o movimiento, pueden usar `EVENT` reliable según la política.
+
+#### Flujo de incorporación de un sensor
+
+```text
+definir tipo de dispositivo y capabilities
+      ↓
+reutilizar IoTNode y wire format
+      ↓
+definir TLV/EventCode solo si no existe uno compatible
+      ↓
+crear carpeta emisor_XXX_v4/
+      ↓
+implementar lectura no bloqueante
+      ↓
+enviar HELLO
+      ↓
+enviar DATA/EVENT/HEARTBEAT
+      ↓
+verificar que la central procesa genéricamente
+      ↓
+crear discovery o entidad MQTT
+```
+
+#### Regla de compatibilidad
+
+- No modificar la cabecera existente para añadir un sensor.
+- Reutilizar `MsgType`, `EventCode` y `TlvTag` existentes cuando semánticamente correspondan.
+- Si hace falta un tipo nuevo compatible, añadirlo documentado.
+- Si el cambio rompe consumidores existentes, incrementar la versión mayor.
+- El receptor debe procesar por tipo/capability, no por una lista rígida de sensores conocidos.
+
+#### Dispositivos candidatos
+
+```text
+emisor_pir_v4
+emisor_temp_v4
+emisor_puerta_v4
+actuador_relay_v4
+ESP8266 PIR
+ESP32 PIR
+ESP32 temperatura
+ESP8266 puerta
+ESP32 relé
+```
+
+#### Decisiones pendientes
+
+1. Qué sensor usa `EVENT` y cuál usa `DATA`.
+2. Qué eventos requieren ACK.
+3. Cómo se representan unidades y escalas.
+4. Cómo se manejan sensores desconocidos.
+5. Si el receptor publica automáticamente una entidad para cada capability.
+6. Cómo se evita crear enums incompatibles.
+7. Qué parte es genérica y qué parte permanece específica del dispositivo.
+
+#### Archivos probables
+
+```text
+lib/IoTProtocol/IoTProtocol.h
+lib/IoTProtocol/IoTPacket.*
+lib/IoTProtocol/IoTNode.*
+receptor_central_v4/src/event_handler.cpp
+receptor_central_v4/src/mqtt_manager.cpp
+emisor_temp_v4/
+emisor_puerta_v4/
+actuador_relay_v4/
+```
+
+#### Criterios de aceptación
+
+- Un sensor nuevo puede añadirse sin duplicar el protocolo.
+- V3 sigue funcionando sin conocer el sensor nuevo.
+- La central no requiere una reescritura para recibir un evento compatible.
+- Cada nuevo sensor tiene HELLO, heartbeat y política de errores.
+- Los tipos y TLV están documentados y probados.
+- Un sensor desconocido no bloquea ni corrompe la central.
+
+---
+
+### 14.11 Idea 9 — Sistema de capabilities
+
+**Objetivo:** que cada dispositivo anuncie automáticamente qué puede detectar, medir o controlar y que la central no dependa de una lista fija.
+
+#### Ejemplo
+
+```text
+DEVICE_ID: 0x12
+
+CAPABILITIES:
+  MOTION
+  TEMPERATURE
+  BATTERY
+```
+
+```text
+DEVICE_ID: 0x13
+
+CAPABILITIES:
+  DOOR
+  BATTERY
+```
+
+#### Flujo
+
+```text
+dispositivo arranca
+      ↓
+HELLO incluye capabilities
+      ↓
+central valida y guarda capabilities
+      ↓
+central crea handlers/entidades compatibles
+      ↓
+Home Assistant recibe discovery correspondiente
+      ↓
+si cambian capabilities, se actualiza el registry
+```
+
+#### Modelo propuesto
+
+```text
+Capability
+ ├── capability_id
+ ├── kind: SENSOR / ACTUATOR / DIAGNOSTIC
+ ├── data_type
+ ├── unit
+ ├── readable
+ ├── writable
+ ├── event_codes[]
+ └── config_schema opcional
+```
+
+#### Ejemplo de capability de dispositivo
+
+```text
+MOTION
+  kind: SENSOR
+  readable: true
+  writable: false
+
+TEMPERATURE
+  kind: SENSOR
+  unit: °C
+  readable: true
+  writable: false
+
+RELAY
+  kind: ACTUATOR
+  readable: true
+  writable: true
+```
+
+#### Decisiones pendientes
+
+1. Si capabilities se codifican como bitmask, lista TLV o mensaje separado.
+2. Cómo se versiona una capability.
+3. Qué hace la central con una capability desconocida.
+4. Cómo se publican unidades y escalas.
+5. Si un actuador debe anunciar comandos permitidos.
+6. Si capabilities pueden cambiar en runtime.
+7. Cómo se actualiza MQTT Discovery cuando cambian.
+8. Qué límite de capabilities soporta un paquete HELLO.
+
+#### Archivos probables
+
+```text
+lib/IoTProtocol/IoTProtocol.h
+lib/IoTProtocol/IoTPacket.*
+lib/IoTProtocol/IoTNode.*
+receptor_central_v4/src/event_handler.cpp
+receptor_central_v4/src/mqtt_manager.cpp
+receptor_central_v4/include/device_registry.h
+```
+
+#### Criterios de aceptación
+
+- La central conoce capabilities sin configuración manual para cada sensor.
+- Un dispositivo con capabilities desconocidas no rompe el parser.
+- Home Assistant crea únicamente entidades compatibles.
+- Las capabilities de actuadores no habilitan comandos sin autenticación.
+- HELLO y registry conservan la versión de capability.
+- Añadir una capability compatible no exige cambiar la cabecera V4.
+
+---
+
+### 14.12 Idea 10 — Watchdog y sistema de recuperación
+
+**Objetivo:** garantizar que un fallo de una parte no derribe todo el sistema.
+
+#### Comportamiento requerido
+
+```text
+WiFi perdido
+    ↓
+reintentar
+
+MQTT perdido
+    ↓
+reintentar con backoff
+
+UDP funcionando
+    ↓
+seguir alarma
+
+loop bloqueado
+    ↓
+watchdog
+    ↓
+reinicio
+
+reinicio
+    ↓
+BOOT_ID nuevo
+    ↓
+heartbeat
+```
+
+#### Subsistemas independientes
+
+- La detección local no depende de MQTT.
+- La bocina local no depende de Home Assistant.
+- El watchdog no debe ser ocultado alimentándolo dentro de un loop bloqueado.
+- La reconexión WiFi no debe impedir la recepción UDP cuando el hardware aún puede recibir.
+- El reinicio debe dejar una razón de boot registrable.
+
+#### Estados de recuperación posibles
+
+```text
+HEALTHY
+WIFI_RECONNECTING
+MQTT_BACKOFF
+DEGRADED_LOCAL
+WATCHDOG_RESET
+RECOVERY_PENDING
+RECOVERED
+```
+
+#### Decisiones pendientes
+
+1. Qué timeout del watchdog es seguro para cada firmware.
+2. Qué razones de reinicio soporta la plataforma.
+3. Qué acciones se intentan antes de reiniciar.
+4. Cuántos fallos consecutivos provocan una alerta.
+5. Si la central debe avisar de un watchdog reset.
+6. Cómo se distingue fallo de WiFi, MQTT, UDP o aplicación.
+7. Si se guarda un contador de reinicios en LittleFS.
+8. Cómo evitar desgaste por reinicios repetidos.
+
+#### Archivos probables
+
+```text
+emisor_pir_v4/src/main.cpp
+receptor_central_v4/src/main.cpp
+receptor_bocina/src/main.cpp
+receptor_bocina/src/mqtt_cliente.cpp
+receptor_bocina/src/state_machine.cpp
+lib/IoTProtocol/IoTStorage.*
+```
+
+#### Criterios de aceptación
+
+- MQTT caído no impide detectar ni activar la alarma local.
+- WiFi perdido produce reintentos no bloqueantes.
+- El watchdog reinicia un firmware realmente bloqueado.
+- El reinicio anuncia BOOT_ID y razón de boot.
+- La central puede distinguir un nodo recuperado de un nodo que simplemente estuvo offline.
+- Los reintentos tienen backoff y no saturan la red.
+
+---
+
+### 14.13 Idea 11 — Telemetría
+
+**Objetivo:** publicar periódicamente una visión cuantitativa del estado de cada dispositivo para diagnóstico y automatización.
+
+#### Topic propuesto
+
+```text
+casa/iot/device/pir_sala/status
+```
+
+El nombre exacto debe mantener una convención estable y no depender de un nombre editable sin un `unique_id` estable.
+
+#### Payload propuesto
+
+```json
+{
+  "online": true,
+  "rssi": -61,
+  "uptime": 182736,
+  "free_heap": 42136,
+  "firmware": "4.3.1",
+  "boot_id": 27
+}
+```
+
+#### Campos posibles
+
+```text
+online
+rssi
+uptime
+free_heap
+firmware
+boot_id
+last_seq
+queue_depth
+tx_count
+rx_count
+ack_timeouts
+retries
+duplicates
+battery
+reset_reason
+```
+
+#### Flujo
+
+```text
+heartbeat o temporizador local
+      ↓
+recoger métricas sin bloquear
+      ↓
+construir payload limitado y válido
+      ↓
+firmar si la política lo exige
+      ↓
+publicar a la central
+      ↓
+central publica estado retained a MQTT
+      ↓
+Home Assistant actualiza sensores de diagnóstico
+```
+
+#### Decisiones pendientes
+
+1. Si la telemetría viaja en `HEARTBEAT`, `DATA` o ambos.
+2. Frecuencia de publicación.
+3. Si el payload será JSON o TLV convertido a JSON por la central.
+4. Qué campos son obligatorios.
+5. Si se publican topics individuales además del JSON agregado.
+6. Qué datos se publican retained.
+7. Cómo se limita el tamaño del payload.
+8. Cómo se evita que la telemetría compita con eventos críticos.
+9. Si batería y reset reason son opcionales.
+
+#### Archivos probables
+
+```text
+lib/IoTProtocol/IoTProtocol.h
+lib/IoTProtocol/IoTNode.cpp
+emisor_pir_v4/src/main.cpp
+receptor_central_v4/src/event_handler.cpp
+receptor_central_v4/src/mqtt_manager.cpp
+receptor_bocina/src/mqtt_cliente.cpp
+```
+
+#### Criterios de aceptación
+
+- La telemetría no bloquea la detección de eventos.
+- El payload siempre es JSON válido si se eligió JSON.
+- Los valores de RSSI, heap, uptime y BOOT_ID coinciden con el dispositivo.
+- Home Assistant puede mostrar el estado sin depender de logs seriales.
+- Un dispositivo sin una métrica opcional no publica un valor engañoso.
+- La frecuencia y el tamaño están documentados.
+
+---
+
+### 14.14 Idea 12 — Panel de diagnóstico
+
+**Objetivo:** mostrar rápidamente la salud de la central, MQTT, WiFi, dispositivos, alarma y cantidad de eventos.
+
+#### Diseño conceptual
+
+```text
+╔══════════════════════════════════╗
+║        IoT ALARM SYSTEM          ║
+╠══════════════════════════════════╣
+║ CENTRAL       🟢 ONLINE           ║
+║ MQTT          🟢 CONNECTED        ║
+║ WiFi          🟢 -57 dBm          ║
+╠══════════════════════════════════╣
+║ SALA          🟢 ONLINE           ║
+║ COCINA        🟢 ONLINE           ║
+║ GARAJE        🟠 STALE            ║
+║ PATIO         🔴 OFFLINE          ║
+╠══════════════════════════════════╣
+║ ALARMA        DESARMADA           ║
+║ EVENTOS       127                 ║
+╚══════════════════════════════════╝
+```
+
+#### Secciones del panel
+
+```text
+Sistema
+ ├── central online/offline
+ ├── MQTT connected/disconnected
+ ├── WiFi y RSSI
+ └── firmware/uptime
+
+Dispositivos
+ ├── nombre
+ ├── zona
+ ├── ONLINE/STALE/OFFLINE
+ ├── RSSI
+ ├── batería
+ └── último evento
+
+Alarma
+ ├── modo actual
+ ├── estado actual
+ ├── última activación
+ └── reconocimiento pendiente
+
+Diagnóstico
+ ├── número de eventos
+ ├── ACK timeouts
+ ├── retransmisiones
+ ├── errores de auth
+ └── reinicios
+```
+
+#### Flujo de datos
+
+```text
+IoTNode/central
+      ↓
+registry + event log + alarm state
+      ↓
+MQTT topics retained / discovery
+      ↓
+Home Assistant dashboard
+```
+
+#### Decisiones pendientes
+
+1. Si el dashboard se implementa solo en Home Assistant.
+2. Qué entidades se crean mediante MQTT Discovery.
+3. Si se usa un sensor JSON agregado o múltiples sensores.
+4. Qué datos deben ser retained.
+5. Cómo se representan estados desconocidos.
+6. Si existe una vista histórica para eventos.
+7. Qué alertas aparecen como notificación y cuáles solo como diagnóstico.
+8. Cómo se organizan las entidades por zona.
+
+#### Archivos probables
+
+```text
+receptor_central_v4/src/mqtt_manager.cpp
+receptor_central_v4/src/event_handler.cpp
+receptor_central_v4/src/event_log.cpp
+receptor_central_v4/src/zone_manager.cpp
+receptor_bocina/src/mqtt_discovery.cpp
+README.md
+```
+
+#### Criterios de aceptación
+
+- El dashboard muestra central, MQTT y WiFi.
+- Cada dispositivo conocido aparece con estado actualizado.
+- `STALE` y `OFFLINE` son visualmente distinguibles.
+- El modo/estado de alarma se refleja correctamente.
+- La cantidad de eventos coincide con el registro definido.
+- La pérdida de MQTT no impide la alarma local; el dashboard solo queda temporalmente desactualizado.
+- No se crean entidades duplicadas al reiniciar o recibir HELLO repetidos.
+
+---
+
+### 14.15 IoTProtocol como plataforma común
+
+**Objetivo:** convertir `IoTProtocol` en la columna vertebral de una plataforma de dispositivos intercambiables, en vez de continuar agregando lógica específica a `emisor_pir_v4`.
+
+#### Mensajes base de la plataforma
+
+```text
+┌─────────────────────────────┐
+│          IoTProtocol        │
+├─────────────────────────────┤
+│ HELLO                       │
+│ HEARTBEAT                   │
+│ STATE_REPORT                │
+│ EVENT                       │
+│ ACK                         │
+│ COMMAND                     │
+│ CONFIG                      │
+│ OTA                         │
+│ ERROR                       │
+└─────────────────────────────┘
+```
+
+#### Hardware objetivo
+
+```text
+ESP8266 PIR
+ESP32 PIR
+ESP32 temperatura
+ESP8266 puerta
+ESP32 relé
+```
+
+Todos deben poder hablar el mismo idioma, aunque sus drivers de hardware sean distintos.
+
+#### Separación recomendada
+
+```text
+Aplicación del dispositivo
+      ↓
+modelo de eventos/datos
+      ↓
+IoTProtocol
+      ↓
+seguridad
+      ↓
+transporte
+      ↓
+WiFi/UDP u otro transporte evaluado
+```
+
+#### Reglas de diseño
+
+- La biblioteca no debe conocer detalles del sensor físico.
+- El dispositivo debe adaptar su hardware al modelo de mensajes.
+- La central debe procesar mensajes genéricos siempre que sea posible.
+- Las funciones específicas deben vivir en handlers o perfiles, no en el parser base.
+- Añadir un sensor no debe exigir cambiar todos los firmwares.
+- Un cambio incompatible requiere versión mayor y migración documentada.
+
+#### Decisiones pendientes
+
+1. Si `IoTProtocol` seguirá siendo propio o adoptará una tecnología estándar.
+2. Qué parte de `IoTNode` debe separarse de `WiFiUDP`.
+3. Si los perfiles de dispositivo son necesarios.
+4. Qué interfaces de transporte y seguridad son realmente útiles en ESP8266.
+5. Qué API pública se compromete a mantener.
+6. Cómo se mantiene compatibilidad con V3.
+7. Cuándo la abstracción añade más complejidad que valor.
+
+#### Criterios de aceptación
+
+- Un sensor nuevo reutiliza la biblioteca sin copiar un protocolo entero.
+- La central procesa mensajes por tipo/capability.
+- Los handlers de aplicación no duplican serialización y seguridad.
+- Existe una estrategia de versionado.
+- Hay tests de compatibilidad entre dispositivos.
+- La arquitectura elegida se justifica con una matriz, no solo con preferencias.
+
+---
+
+### 14.16 Roadmap detallado por versiones
+
+Este roadmap conserva la secuencia estratégica original de `ideas.md`. Las versiones son objetivos de organización; no deben declararse alcanzadas hasta cumplir sus criterios.
+
+#### V4.3.1 — Seguridad y pruebas
+
+```text
+V4.3.1
+├── Seguridad
+├── HMAC
+├── Replay protection
+├── BOOT_ID
+└── Tests
+```
+
+Alcance:
+
+- BOOT_ID persistente conectado.
+- HMAC aplicado de manera consistente.
+- Verificación antes de ACK/deduplicación/dispatch.
+- Política anti-replay definida.
+- Tests host de protocolo, CRC, TLV, cola y auth.
+- Separación de secretos.
+- Línea base de compilación V3/V4.
+
+No avanzar por nombre de versión si estos elementos solo están documentados pero no probados.
+
+#### V4.4 — Estado, eventos y diagnóstico
+
+```text
+V4.4
+├── Estado de dispositivos
+├── Eventos
+├── Diagnóstico
+└── Watchdog
+```
+
+Alcance:
+
+- Registry ampliado.
+- Heartbeat y telemetría coherentes.
+- Registro circular de 100 eventos.
+- Estados `ONLINE / STALE / OFFLINE` verificables.
+- Razón de boot y recuperación.
+- Primer dashboard o conjunto de entidades de diagnóstico.
+
+#### V4.5 — Zonas y máquina de alarma
+
+```text
+V4.5
+├── Zonas
+├── Modos de alarma
+└── Máquina de estados
+```
+
+Alcance:
+
+- Estados `DISARMED`, `ARMING`, `ARMED`, `TRIGGERED`, `ALARMING`, `ACKNOWLEDGED`.
+- Modos `DISARMED`, `ARM_HOME`, `ARM_AWAY`, `NIGHT`, `ALARM`, `MAINTENANCE`.
+- Políticas por zona.
+- Comandos autenticados.
+- Registro de transiciones.
+- Pruebas de transiciones válidas e inválidas.
+
+#### V5.0 — Capabilities, configuración y OTA
+
+```text
+V5.0
+├── Capacidades
+├── Configuración remota
+├── OTA
+└── Rollback
+```
+
+Alcance:
+
+- HELLO con capabilities.
+- Registry dinámico.
+- Configuración remota autenticada y persistente.
+- OTA autenticado, hash/verificación y confirmación.
+- Rollback probado o decisión documentada de usar recuperación física.
+- Revisión de si la arquitectura requiere romper V4.
+
+#### V5.x — Expansión
+
+```text
+V5.x
+├── Nuevos sensores
+├── Relés
+├── Batería
+├── Temperatura
+└── Expansión
+```
+
+Alcance posible:
+
+- PIR adicionales.
+- Sensores magnéticos.
+- Temperatura y humedad.
+- Humo, gas, luz, botón y vibración.
+- Relés y otros actuadores.
+- Métricas de batería.
+- Nuevos perfiles de dispositivo.
+- Transportes alternativos solo si la evaluación los justifica.
+
+#### Criterios de promoción de versión
+
+- Todos los elementos de la versión están implementados.
+- Los tests automatizados pasan.
+- La compilación del hardware afectado pasa.
+- Las pruebas funcionales están registradas.
+- La documentación coincide con el código.
+- No hay secretos ni cambios de wire format no documentados.
+- Se conserva la compatibilidad prometida o existe plan de migración.
+
+---
+
+### 14.17 Cinco primeras prioridades estratégicas
+
+Además del orden técnico de las fases, la priorización estratégica original recomienda:
+
+1. **Seguridad.** Evitar paquetes falsos, replay y comandos no autorizados.
+2. **Pruebas automáticas.** Convertir las reglas del protocolo en regresiones reproducibles.
+3. **Máquina de estados.** Hacer explícitas las reglas de la alarma.
+4. **Registro de eventos.** Poder explicar qué ocurrió después de un fallo.
+5. **Sistema de capabilities.** Permitir que la central conozca dinámicamente qué puede hacer cada dispositivo.
+
+Si hay que elegir entre una función nueva y una de estas cinco, priorizar la que reduzca riesgo o aumente verificabilidad, salvo que exista una razón operativa documentada.
+
+### 14.18 Estado de las ideas después de esta ampliación
+
+| Idea | Estado documental | Próximo paso |
+|---|---|---|
+| Seguridad y confiabilidad | **DETALLADA** | Ejecutar fases 0–7 y registrar evidencia |
+| Estado completo de dispositivos | **DETALLADA** | Definir campos finales y persistencia |
+| Registro de 100 eventos | **DETALLADA** | Elegir RAM/LittleFS y API de consulta |
+| Máquina de estados de alarma | **DETALLADA** | Resolver decisiones de estados/modos/transiciones |
+| Zonas | **DETALLADA** | Definir modelo y políticas por modo |
+| Configuración centralizada | **DETALLADA** | Definir autorización, versión y rollback de config |
+| OTA y rollback | **DETALLADA** | Verificar capacidades reales del bootloader |
+| Sensores sin protocolo paralelo | **DETALLADA** | Implementar un sensor piloto y probar compatibilidad |
+| Capabilities | **DETALLADA** | Elegir representación en HELLO/TLV |
+| Watchdog y recuperación | **DETALLADA** | Medir timeouts y probar fallos controlados |
+| Telemetría | **DETALLADA** | Definir payload/topic/frecuencia |
+| Dashboard | **DETALLADA** | Definir entidades MQTT Discovery y vista HA |
+| IoTProtocol como plataforma | **DETALLADA** | Ejecutar evaluación V5 antes de crear abstracciones |
+| Roadmap V4.3.1→V5.x | **DETALLADA** | Promover versiones solo con criterios cumplidos |
+| Clasificación por capa | **DETALLADA** | Aplicarla a cada nueva issue o feature |
