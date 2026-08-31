@@ -192,7 +192,68 @@ Debe conservar:
 
 `IoTProtocol` no activará directamente la bocina ni publicará directamente en MQTT.
 
-#### U5 — Compatibilidad temporal durante la migración — `PENDIENTE`
+#### U4.1 — OTA de mantenimiento para los dos equipos — `PENDIENTE`
+
+El objetivo es que ambos equipos físicos puedan actualizarse por WiFi:
+
+```text
+emisor  — Wemos D1 Mini / ESP8266
+central — NodeMCU v2 / ESP8266
+```
+
+La primera implementación será **ArduinoOTA**, que ya forma parte del ecosistema ESP8266 y requiere menos memoria y dependencias que añadir un servidor web completo. El receptor V3 ya tiene `ArduinoOTA` en `receptor_bocina/src/ota.cpp`; el emisor V4 y la central V4 todavía no tienen el flujo completo conectado aunque la central ya declara un entorno `*_ota` en PlatformIO.
+
+La OTA será un **plano de mantenimiento separado** de `lib/IoTProtocol/`: no se añadirá al wire format ni se mezclará con EVENT, ACK, HMAC o capabilities. Si ambos firmwares comparten suficiente código, se podrá crear un helper separado, por ejemplo `lib/IoTOTA/`, pero no se debe introducir lógica OTA dentro de `lib/IoTProtocol/`.
+
+#### Orden de implementación OTA
+
+1. Añadir `ArduinoOTA` al emisor y a la central unificada.
+2. Asignar hostname, puerto y credencial OTA distintos o identificables por equipo.
+3. Mantener la credencial OTA separada de WiFi, MQTT y HMAC; debe vivir en `secrets.h` y no aparecer en logs.
+4. Crear entornos PlatformIO `emisor_pir_ota` y `receptor_central_ota` con `upload_protocol = espota`.
+5. Ejecutar el servicio OTA dentro del loop sin desplazar la recepción UDP: en la central, UDP va primero; en el emisor, el procesamiento de sensores y `IoTNode` conserva prioridad.
+6. Usar callbacks de inicio, progreso, finalización y error.
+7. Definir un estado seguro antes de aceptar la actualización: no comenzar OTA mientras la central esté ejecutando una alarma crítica o mientras el actuador deje una salida peligrosa activa.
+8. Verificar tamaño de firmware y espacio libre con `ESP.getFreeSketchSpace()` antes de depender de OTA.
+9. Mantener siempre un procedimiento de recuperación por USB/serial.
+
+#### Seguridad OTA
+
+ArduinoOTA permite configurar password, hostname y puerto, pero eso no convierte automáticamente la OTA en segura para Internet. La OTA se limitará a la LAN de mantenimiento, con firewall o VLAN, sin exponer el puerto al exterior. La credencial OTA no será reutilizada como clave HMAC.
+
+La OTA del ESP8266 no debe documentarse como rollback garantizado. El diseño debe asumir que una pérdida de energía o una imagen incompatible puede requerir recuperación física; por eso cada equipo debe probarse primero por USB y conservarse un firmware recuperable.
+
+#### Interfaz web opcional
+
+`ElegantOTA` se evaluará como una segunda etapa si se necesita actualizar desde un navegador (`/update`) o cargar también LittleFS. No será un requisito para desbloquear la OTA básica porque añade un servidor HTTP y, en modo asíncrono, dependencias como `ESPAsyncWebServer`. Además, su edición open source declara licencia AGPL-3.0, por lo que antes de incorporarla al firmware final debe revisarse si esa licencia es aceptable para el proyecto.
+
+La alternativa `jandrassy/ArduinoOTA` no será la base inicial: su propia documentación advierte que no está probada para PlatformIO. El ejemplo de Hackster sobre un SSID de depuración sirve como referencia educativa, pero no se copiarán credenciales ni un modo de acceso abierto a producción. El artículo de SunFounder está centrado en ESP32 y su modelo de particiones duales no se puede asumir para este ESP8266.
+
+#### Criterios de aceptación OTA
+
+- El emisor se actualiza por `espota` y vuelve a publicar HELLO/heartbeat después de reiniciar.
+- La central se actualiza por `espota` y vuelve a recibir UDP.
+- Un hostname no apunta al equipo equivocado.
+- Una contraseña incorrecta es rechazada.
+- Una imagen demasiado grande se detecta antes de iniciar la actualización.
+- UDP, PIR, TIMBRE y bocina tienen un comportamiento seguro durante la ventana OTA.
+- Una actualización fallida deja un procedimiento de recuperación documentado y probado por serial.
+- Se mide RAM, flash y tiempo de loop antes y después de añadir OTA.
+- No se prueba OTA durante una alarma crítica ni se expone a Internet.
+
+#### Fuentes consultadas
+
+Contenido reexpresado a partir de la documentación enlazada:
+
+- [ESP8266 Arduino Core — OTA Updates](https://arduino.esp8266.com/Arduino/versions/2.1.0/doc/ota_updates/ota_updates.html): requisitos de flash, password/hostname/puerto, callbacks, seguridad y recuperación.
+- [ESP8266 Arduino Core — documentación en español](https://esp8266-arduino-spanish.readthedocs.io/es/latest/ota_updates/readme.html): resumen de ArduinoOTA, actualización web y advertencias de seguridad.
+- [ElegantOTA](https://github.com/ayushsharma82/ElegantOTA) y [guía de integración](https://docs.elegantota.pro/getting-started/integration): interfaz web para firmware/LittleFS e integración con `begin()`/`loop()`.
+- [ElegantOTA — modo asíncrono](https://docs.elegantota.pro/getting-started/async-mode): dependencias y trade-off del servidor web asíncrono.
+- [ArduinoOTA de JAndrassy](https://github.com/jandrassy/ArduinoOTA): alcance general y advertencia específica para PlatformIO.
+- [Hackster — OTA en Wemos D1 Mini](https://www.hackster.io/sulis-priyanto/ota-arduino-programming-wemos-d1-mini-4af961): referencia educativa de modo de depuración, no diseño de producción.
+- [SunFounder — ArduinoOTA y ElegantOTA](https://www.sunfounder.com/blogs/news/esp32-ota-updates-a-complete-guide-to-arduinoota-and-elegantota-firmware-upgrades): comparación general, con advertencia de que su modelo principal es ESP32.
+
+
 
 Si no es posible actualizar todos los dispositivos al mismo tiempo, la central unificada podrá aceptar temporalmente:
 
@@ -260,7 +321,8 @@ Después de tener una única versión estable se podrán añadir:
 - configuración remota autenticada;
 - perfil de alarma, modos y zonas;
 - nuevos sensores y relé;
-- OTA distribuido;
+- OTA de mantenimiento para emisor y central;
+- interfaz web ElegantOTA, solo si se aprueba su licencia y necesidad;
 - cifrado, solo si existe un requisito real de confidencialidad;
 - evaluación comparativa de V5.
 
@@ -1373,21 +1435,59 @@ Propuesta:
 - No depender exclusivamente de mDNS: en Windows y algunas redes `.local` puede ser inestable.
 - Mantener la IP de la central en configuración persistente si no existe un mecanismo fiable de descubrimiento.
 
-### 7.6 OTA distribuido
+### 7.6 OTA para los dos equipos
 
-No implementarlo hasta que haya suficientes nodos para justificar la complejidad.
+El objetivo inmediato es habilitar actualización OTA de firmware para el emisor Wemos D1 Mini y la central NodeMCU v2. No se debe confundir esta OTA de mantenimiento con un futuro sistema de distribución OTA administrado por la central.
 
-Diseño posible:
+#### Etapa OTA-1 — ArduinoOTA
 
-1. La central almacena el firmware.
-2. Envía una orden OTA autenticada.
-3. El nodo descarga por HTTP desde una fuente conocida.
-4. Verifica hash y tamaño.
-5. Aplica el firmware de forma segura.
-6. Reinicia y reporta resultado.
-7. Si el boot falla, debe existir rollback real o una estrategia de recuperación física.
+Usar la biblioteca `ArduinoOTA` del core ESP8266 en ambos firmwares:
 
-No considerar “descargar y reiniciar” como OTA seguro sin verificar integridad y recuperación.
+- el receptor V3 ya tiene una implementación parcial en `receptor_bocina/src/ota.cpp`;
+- el emisor V4 debe añadir inicialización y atención OTA;
+- la central V4 debe añadir inicialización y atención OTA, no solo el entorno `upload_protocol = espota`;
+- cada equipo debe tener hostname y credencial identificables;
+- la contraseña OTA debe estar en `secrets.h`, separada de WiFi, MQTT y HMAC;
+- la central debe procesar UDP antes de `ArduinoOTA.handle()`;
+- el emisor debe conservar la prioridad de sensores y `IoTNode`;
+- la OTA solo se permitirá durante una ventana de mantenimiento y dentro de la LAN.
+
+Los entornos de PlatformIO deberán generar el firmware normal y el entorno de carga OTA, por ejemplo:
+
+```ini
+[env:emisor_pir_ota]
+extends = env:emisor_pir
+upload_protocol = espota
+upload_port = <host-o-ip-del-emisor>
+
+[env:receptor_central_ota]
+extends = env:receptor_central
+upload_protocol = espota
+upload_port = <host-o-ip-de-la-central>
+```
+
+Los valores reales no se fijarán hasta confirmar la topología y el hostname de cada placa.
+
+#### Etapa OTA-2 — Interfaz web opcional
+
+Solo si se necesita actualizar desde un navegador se evaluará `ElegantOTA`. Esta opción requiere un servidor HTTP, sus rutas de actualización y atención desde el loop; el modo asíncrono añade dependencias de `ESPAsyncWebServer`. También debe revisarse la licencia AGPL-3.0 de la edición open source antes de usarla en el firmware final.
+
+No se añadirá ElegantOTA a los dos equipos simplemente por tener una interfaz atractiva: ArduinoOTA cubre primero la necesidad de actualización por PlatformIO y mantiene menor complejidad en la ruta crítica UDP.
+
+#### Seguridad, seguridad operacional y recuperación
+
+- No exponer el puerto OTA a Internet.
+- Aplicar firewall/VLAN o una red de mantenimiento.
+- No aceptar OTA mientras la central esté en una alarma crítica o un actuador esté en un estado peligroso.
+- Usar callbacks de inicio, progreso, finalización y error.
+- Medir `ESP.getFreeSketchSpace()` y el tamaño del binario antes de actualizar.
+- Probar pérdida de WiFi, imagen incompatible, contraseña incorrecta y reinicio posterior.
+- Mantener siempre recuperación por USB/serial.
+- No prometer rollback automático: en ESP8266 debe demostrarse específicamente o documentarse la recuperación física.
+
+#### Criterio de terminado
+
+La OTA de esta fase está terminada solo cuando ambos equipos se actualizan por `espota`, reinician con la aplicación operativa, mantienen la prioridad de alarma/UDP y tienen un procedimiento de recuperación probado. La carga web y la OTA distribuida desde la central son fases posteriores, no requisitos para declarar terminada OTA-1.
 
 ### 7.7 Cifrado
 
@@ -1554,7 +1654,9 @@ Evaluar, no asumir:
 | Reed switch | Futuro | Después de Fase 7 | OPEN/CLOSE y state report |
 | Relé | Futuro | Después de Fase 7 | COMMAND/RESPONSE |
 | DHCP/discovery | Futuro | Después de V4 estable | Cambio de IP |
-| OTA distribuido | Futuro lejano | Cuando haya necesidad | Hash, rollback |
+| OTA para ambos equipos | Pendiente; ArduinoOTA V3 receptor parcial, V4 no conectado | U4.1 / Fase 7.6 | espota en emisor y central, recuperación serial |
+| OTA web ElegantOTA | Condicional | Después de OTA-1 | Necesidad, dependencias y licencia AGPL-3.0 |
+| OTA distribuido desde central | Futuro lejano | Después de OTA-1 y varios nodos | Autorización, hash, rollback |
 | AES-GCM | Condicional | Solo requisito de confidencialidad | Modelo de nonce y payload |
 | Persistencia de estado | Futuro | Después de estabilidad | Reinicio de central |
 | Alertas HA offline | Futuro | Independiente del firmware | Automatización HA |
