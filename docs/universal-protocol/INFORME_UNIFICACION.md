@@ -7,6 +7,7 @@
 - Fuentes: cuatro borradores del commit `3390de3ef886e4057d4975cc775311f3a25c4c82`.
 - Resultado principal: `docs/universal-protocol/META_PROMPT.md`.
 - Código funcional modificado: ninguno.
+- Auditoría complementaria: los cinco drafts restantes se analizaron por separado en [`INFORME_DRAFTS_RESTANTES.md`](INFORME_DRAFTS_RESTANTES.md); no forman parte de las cuatro fuentes de esta matriz.
 
 ## 1. Alcance de la auditoría
 
