@@ -18,6 +18,10 @@
 #define MY_DEVICE_TYPE  DeviceType::PIR_SENSOR   // Clase del dispositivo
 #define MY_DEVICE_NAME  "PIR Entrada"            // Nombre legible
 
+// --- OTA de mantenimiento ---
+#define EMISOR_OTA_HOSTNAME "wifi-pir-emisor-v4"
+#define EMISOR_OTA_PORT     8266
+
 // --- Red ---
 extern IPAddress dispositivo_IP;
 extern IPAddress central_IP;

@@ -19,6 +19,7 @@
 #include "network_config.h"
 #include "device_config.h"
 #include "logger.h"
+#include "ota.h"
 
 // --- Shared secret para HMAC (desde secrets.h, NO versionado) ---
 static const uint8_t AUTH_KEY[] = IOT_AUTH_KEY;
@@ -53,6 +54,7 @@ static void manejarWiFi() {
         if (wifiConectando) {
             wifiConectando = false;
             LOG_INFO("WiFi OK: %s", WiFi.localIP().toString().c_str());
+            setupOTA();
         }
         return;
     }
@@ -177,6 +179,12 @@ void setup() {
         delay(100);
     }
 
+    if (WiFi.status() == WL_CONNECTED) {
+        setupOTA();
+    } else {
+        LOG_WARN("WiFi no disponible: OTA se inicializará al reconectar");
+    }
+
     // --- IoTNode con BOOT_ID persistente ---
     // Override del begin() para usar boot counter del storage
     node.begin();
@@ -212,6 +220,13 @@ void setup() {
 void loop() {
     ESP.wdtFeed();
     manejarWiFi();
+    handleOTA();
+
+    // Durante la transferencia no se generan eventos ni tráfico de aplicación.
+    // ArduinoOTA.handle() sigue siendo atendido en cada iteración.
+    if (otaEnProgreso()) {
+        return;
+    }
 
     // IoTNode: cola, reliable, ACKs, heartbeat
     node.loop();
