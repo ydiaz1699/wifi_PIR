@@ -33,8 +33,11 @@ Sistema modular de alarma y sensores IoT usando ESP8266 con protocolo propio sob
 | Documento | Contenido |
 |-----------|-----------|
 | [**ARCHITECTURE.md**](docs/ARCHITECTURE.md) | Cómo funciona todo el sistema (emisor, receptor, protocolo, modos) |
+| [**ANALISIS_INICIAL_HALLAZGOS.md**](docs/ANALISIS_INICIAL_HALLAZGOS.md) | Snapshot auditable del análisis, hallazgos y método para comparar ideas futuras |
+| [**universal-protocol/**](docs/universal-protocol/) | Meta-prompt unificado e informe para diseñar el protocolo universal |
 | [**CHANGELOG.md**](docs/CHANGELOG.md) | Historial completo de versiones (V3.1 → V4.3) |
 | [**BUGS_FIXED.md**](docs/BUGS_FIXED.md) | 10 bugs resueltos con causas y reglas para no repetirlos |
+| [**PLAN_EJECUCION_FUTURA.md**](docs/PLAN_EJECUCION_FUTURA.md) | Estado técnico y orden seguro para continuar el desarrollo |
 | [**ROADMAP.md**](docs/ROADMAP.md) | Mejoras futuras con instrucciones concretas paso a paso |
 
 ## Quick Start
@@ -81,8 +84,13 @@ Presionar timbre/activar PIR → debe aparecer:
 wifi_PIR/
 ├── docs/                     ← DOCUMENTACIÓN
 │   ├── ARCHITECTURE.md
+│   ├── ANALISIS_INICIAL_HALLAZGOS.md
+│   ├── universal-protocol/
+│   │   ├── META_PROMPT.md
+│   │   └── INFORME_UNIFICACION.md
 │   ├── CHANGELOG.md
 │   ├── BUGS_FIXED.md
+│   ├── PLAN_EJECUCION_FUTURA.md
 │   └── ROADMAP.md
 │
 ├── secrets.h.template        ← Copiar a secrets.h (WiFi + MQTT + AUTH_KEY)
