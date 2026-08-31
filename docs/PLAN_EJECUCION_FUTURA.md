@@ -6,8 +6,8 @@
 
 **Repositorio:** `ydiaz1699/wifi_PIR`
 **Proyecto:** red doméstica de sensores y alarma sobre ESP8266
-**Fecha de consolidación:** 2026-08-29
-**Estado de este plan:** aprobado como guía de ejecución futura; no implica que las fases estén implementadas.
+**Fecha de consolidación:** 2026-08-31
+**Estado de este plan:** documento canónico actualizado con el plan maestro de unificación V3→V4; las fases siguen requiriendo evidencia de implementación, compilación y verificación.
 
 ---
 
@@ -19,8 +19,8 @@ Antes de cambiar código:
 2. Ejecutar `git status --short` y conservar cualquier cambio previo del usuario.
 3. Leer los archivos reales relacionados con la fase que se va a ejecutar. Este plan describe la intención, pero el código es la fuente de verdad de las firmas, nombres y estructuras actuales.
 4. No asumir que una tarea está implementada porque aparezca en la documentación. Verificarla en el código y mediante compilación o prueba.
-5. No mezclar V3 de producción con V4 de desarrollo salvo que una tarea lo pida expresamente.
-6. No eliminar ni sobrescribir funcionalidad de producción para acelerar el desarrollo de V4.
+5. No mezclar V3 de producción con V4 de desarrollo durante la transición. La unificación final sí migrará el comportamiento probado de V3 a la arquitectura V4, pero solo después de validarlo.
+6. No eliminar ni sobrescribir funcionalidad de producción para acelerar el desarrollo de V4; V3 se conserva hasta que la versión unificada esté validada en hardware.
 7. Ejecutar primero las comprobaciones pequeñas y después las pruebas completas.
 8. Actualizar este documento, `CHANGELOG.md`, `ROADMAP.md` o la documentación correspondiente cuando una fase se complete. La documentación no debe afirmar que una función está terminada si no existe una prueba que lo confirme.
 
@@ -30,11 +30,254 @@ La versión V3.5.1 es la alarma operativa y debe permanecer estable. La versión
 
 ```text
 preservar V3 → crear pruebas host para V4 → corregir seguridad V4
-→ validar con simulador/hardware → documentar → añadir sensores
-→ evaluar una futura V5
+→ migrar el comportamiento probado de V3 → validar con simulador/hardware
+→ promover una única versión → añadir sensores → evaluar una futura V5
 ```
 
 No se debe reescribir todo el repositorio para resolver una sola incidencia de V4.
+
+## 1.1 Objetivo arquitectónico: una única versión final
+
+El repositorio tiene dos generaciones funcionales, pero el objetivo del proyecto es terminar con una sola versión de producción. No se deben mantener V3 y V4 como dos productos permanentes ni copiar ambas implementaciones dentro de los mismos archivos.
+
+```text
+V3.5.1 actual
+  └── comportamiento probado: PIR, TIMBRE, ACK, bocina, modo LOCAL/HA, OTA
+        ↓ migración y validación por fases
+V4 unificada
+  ├── núcleo común IoTProtocol
+  ├── emisor PIR + TIMBRE
+  └── central + alarma + MQTT/HA + OTA
+        ↓ validación en hardware
+una única versión de producción
+```
+
+### Qué es `lib/IoTProtocol/`
+
+`wifi_PIR/lib/IoTProtocol/` es la biblioteca común que debe convertirse en el núcleo técnico de la versión final. No es una tercera versión del producto ni debe contener lógica específica de la bocina, MQTT, Home Assistant o los pines del PIR.
+
+| Módulo | Responsabilidad |
+|---|---|
+| `IoTProtocol.h/.cpp` | Wire format binario, CRC16, TLV, serialización y deserialización |
+| `IoTNode.h/.cpp` | UDP, cola, prioridades, ACK, retransmisiones, deduplicación y heartbeat |
+| `IoTAuth.h/.cpp` | Autenticación HMAC |
+| `IoTStorage.h/.cpp` | LittleFS, contador de arranque y configuración persistente |
+| `IoTConfigHandler.h/.cpp` | Procesamiento de configuración remota |
+
+La separación final será:
+
+```text
+lib/IoTProtocol/
+    protocolo, transporte común, reliability, seguridad y persistencia
+
+emisor_pir/
+    lectura PIR/TIMBRE, configuración del dispositivo y uso de IoTNode
+
+receptor_central/
+    registry, máquina de alarma, bocina, MQTT/Home Assistant, OTA y diagnóstico
+```
+
+La biblioteca recibe y valida mensajes; la central decide si un evento activa la bocina o se publica en MQTT. El núcleo no debe conocer pines, nombres de topics ni reglas concretas de la alarma.
+
+### Versiones durante la transición
+
+```text
+V3.5.1
+├── emisor_pir/
+└── receptor_bocina/
+
+V4.3 en desarrollo
+├── lib/IoTProtocol/
+├── emisor_pir_v4/
+└── receptor_central_v4/
+```
+
+No se deben borrar ahora `emisor_pir/` ni `receptor_bocina/`: contienen comportamiento de producción que debe inventariarse, migrarse y verificarse. Los proyectos `emisor_pir_v4/` y `receptor_central_v4/` son transitorios mientras se construye la versión unificada.
+
+### Plan maestro de unificación V3 → V4
+
+Las fases `U` son el plan de producto. Las fases técnicas numeradas de la sección 6 contienen las tareas detalladas de seguridad, pruebas y validación que se ejecutan dentro de estas etapas.
+
+#### U0 — Línea base y protección de V3 — `VERIFICADA`
+
+- Compilar emisor y receptor V3.
+- Compilar emisor y central V4.
+- Ejecutar la suite host existente de `IoTProtocol`.
+- Confirmar que `secrets.h` permanece fuera del control de versiones.
+- No introducir cambios funcionales en V3 durante el hardening inicial.
+
+Evidencia actual:
+
+```text
+emisor_pir              PASS
+receptor_bocina         PASS
+emisor_pir_v4           PASS
+receptor_central_v4     PASS
+host IoTProtocol        10/10 PASS
+```
+
+#### U1 — Inventario de comportamiento V3 — `PENDIENTE`
+
+Registrar antes de migrar:
+
+- comportamiento del PIR y del TIMBRE;
+- ACK asíncrono y eventos simultáneos;
+- deduplicación y retransmisiones;
+- prioridad local de la bocina;
+- modo LOCAL/HA y reconexión MQTT;
+- MQTT Discovery;
+- OTA;
+- máquina de estados;
+- límites de bloqueo del loop.
+
+V3 es la fuente del comportamiento probado, no la arquitectura final. Cada elemento debe tener destino en la central o en el emisor unificado y un criterio de aceptación.
+
+#### U2 — Completar y endurecer el núcleo V4 — `EN PROGRESO`
+
+Ejecutar, en este orden:
+
+1. Conectar BOOT_ID persistente de `IoTStorage` con `IoTNode`.
+2. Completar tests host de deduplicación, cola y autenticación.
+3. Definir el contrato de autenticación y su compatibilidad.
+4. Autenticar antes de ACK, registry, deduplicación y callbacks.
+5. Aplicar anti-replay compatible con UDP fuera de orden.
+6. Validar HMAC, tamaño, campos firmados y política de paquetes inválidos.
+7. Crear el simulador UDP reproducible.
+
+No cambiar el wire format V4.x durante esta etapa salvo que una incompatibilidad obligue a una nueva versión mayor documentada.
+
+#### U3 — Migrar el emisor V3 a la arquitectura V4 — `PENDIENTE`
+
+El emisor final debe usar `IoTNode` y publicar:
+
+```text
+EVENT + EventCode::MOTION
+EVENT + EventCode::TIMBRE
+```
+
+Debe conservar:
+
+- lectura independiente de PIR y TIMBRE;
+- ausencia de `delay()` bloqueante;
+- varios eventos en vuelo;
+- retransmisión asíncrona;
+- manejo correcto de PIR sostenido en `HIGH`.
+
+El destino final puede ser `emisor_pir/`, reutilizando ese nombre como proyecto único después de migrar y validar. `emisor_pir_v4/` no debe conservarse como segundo emisor permanente.
+
+#### U4 — Migrar el receptor V3 a la central V4 — `PENDIENTE`
+
+La central final debe integrar el comportamiento probado de `receptor_bocina/` con `receptor_central_v4/`:
+
+```text
+receptor_central/
+├── núcleo IoTProtocol
+├── recepción UDP y registry
+├── máquina de alarma
+├── bocina
+├── MQTT/Home Assistant
+├── OTA
+└── diagnóstico
+```
+
+Debe conservar:
+
+- bocina local inmediata;
+- UDP antes que MQTT;
+- funcionamiento sin broker;
+- modo LOCAL/HA;
+- reconexión MQTT controlada;
+- procesamiento independiente de PIR y TIMBRE;
+- OTA y máquina de estados, una vez verificadas.
+
+`IoTProtocol` no activará directamente la bocina ni publicará directamente en MQTT.
+
+#### U5 — Compatibilidad temporal durante la migración — `PENDIENTE`
+
+Si no es posible actualizar todos los dispositivos al mismo tiempo, la central unificada podrá aceptar temporalmente:
+
+```text
+central unificada
+├── protocolo V4 binario
+└── adaptador V3 textual temporal
+```
+
+Orden operativo:
+
+1. actualizar la central;
+2. mantener emisores V3 funcionando;
+3. migrar emisores uno por uno;
+4. confirmar que no quedan nodos V3;
+5. retirar el adaptador textual.
+
+Este adaptador no es la arquitectura final y tendrá una condición explícita de eliminación.
+
+#### U6 — Validación integrada — `PENDIENTE`
+
+Probar, como mínimo:
+
+- PIR;
+- TIMBRE;
+- PIR y TIMBRE simultáneos;
+- pérdida y recuperación de WiFi;
+- MQTT apagado y recuperado;
+- duplicados, CRC inválido y HMAC inválido;
+- retransmisiones;
+- reinicio de emisor y central;
+- bocina durante ráfagas;
+- Home Assistant;
+- OTA;
+- seguridad y anti-replay.
+
+La validación debe incluir tests host, simulador y hardware, con métricas de loop, RTT, retransmisiones, RAM, flash y eventos perdidos.
+
+#### U7 — Promoción a una única versión de producción — `PENDIENTE`
+
+Solo cuando U2, U3, U4 y U6 estén verificadas:
+
+```text
+se conserva:
+├── lib/IoTProtocol/
+├── emisor_pir/
+├── receptor_central/
+├── tests/
+└── tools/
+
+se retira o archiva:
+├── emisor_pir_v4/
+├── receptor_central_v4/
+└── código V3 duplicado que ya no tenga consumidores
+```
+
+La eliminación de proyectos antiguos requiere comprobar referencias, compilar desde la estructura final y validar hardware. No se debe borrar código solo porque exista una implementación aparentemente equivalente.
+
+#### U8 — Expansión después de la unificación — `PENDIENTE`
+
+Después de tener una única versión estable se podrán añadir:
+
+- capability discovery;
+- event log y telemetría;
+- configuración remota autenticada;
+- perfil de alarma, modos y zonas;
+- nuevos sensores y relé;
+- OTA distribuido;
+- cifrado, solo si existe un requisito real de confidencialidad;
+- evaluación comparativa de V5.
+
+### Regla de promoción
+
+Una fase de unificación no está terminada porque compile. Debe cumplir:
+
+```text
+implementación → tests → compilación → simulador/hardware → documentación → revisión
+```
+
+Mientras U7 no esté verificada, el estado oficial sigue siendo:
+
+```text
+V3.5.1 = producción
+V4.3   = desarrollo
+```
 
 ---
 
@@ -546,28 +789,44 @@ Las fases deben ejecutarse en este orden. No saltar directamente a nuevos sensor
 
 ---
 
-### Fase 1 — Crear infraestructura de pruebas host
+### Fase 1 — Infraestructura de pruebas host — `PARCIALMENTE VERIFICADA`
 
 **Objetivo:** poder validar serialización, CRC, TLV, deduplicación, cola y HMAC sin depender inmediatamente del hardware.
 
-#### Estructura prevista
+#### Estado actual
+
+Ya existe una infraestructura mínima y reproducible para la unidad independiente `IoTProtocol`:
 
 ```text
 tests/
 ├── platformio.ini
-├── test_protocol.cpp
-├── test_dedup.cpp
-├── test_auth.cpp
-└── test_queue.cpp
+├── host_compat/Arduino.h
+├── src/IoTProtocol.cpp
+└── test/test_protocol/test_protocol.cpp
 ```
 
-La configuración puede iniciar con:
+Comando validado:
 
-```ini
-[env:native_test]
-platform = native
-test_framework = unity
-build_src_filter = -<*> +<../lib/IoTProtocol/>
+```bash
+python3 -m platformio test -d tests -e native_test
+```
+
+Resultado actual: **10/10 pruebas pasadas** para CRC16, TLV, endianess, validación, serialización/deserialización, CRC, longitudes, payload máximo, prioridades y versión.
+
+Todavía faltan tests host específicos para deduplicación, cola, HMAC y el orden de efectos de la recepción. Esas pruebas no deben marcarse como cubiertas por el resultado 10/10 actual.
+
+#### Extensión pendiente
+
+```text
+tests/
+├── platformio.ini
+├── host_compat/Arduino.h
+├── src/IoTProtocol.cpp
+└── test/
+    ├── test_protocol/test_protocol.cpp
+    ├── test_dedup/test_dedup.cpp
+    ├── test_auth/test_auth.cpp
+    └── test_queue/test_queue.cpp
 ```
 
 La configuración exacta debe ajustarse a las dependencias reales de PlatformIO. No copiar ciegamente un ejemplo si la biblioteca incluye cabeceras específicas de ESP8266 que no compilan en host.
@@ -1288,8 +1547,8 @@ Evaluar, no asumir:
 | Auth antes de ACK/dedup | Pendiente | Fase 3 | Paquete HMAC inválido |
 | HMAC de 8 bytes | Decisión pendiente | Fase 5 | Compatibilidad y tests |
 | Anti-replay | Pendiente | Fase 4 | Replay y fuera de orden |
-| Tests host | Pendiente | Fase 1 | `pio test` reproducible |
-| Simulador UDP | Pendiente | Fase 6 | Casos reproducibles |
+| Tests host | Parcialmente verificado: `IoTProtocol` 10/10 | Fase 1 / U2 | Deduplicación, cola, HMAC y orden de efectos |
+| Simulador UDP | Pendiente | Fase 6 / U2 | Casos reproducibles |
 | Sirena con patrón | Pendiente | Fase 8 | MOTION/TIMBRE simultáneos |
 | DHT22 | Futuro | Después de Fase 7 | DATA y heartbeat |
 | Reed switch | Futuro | Después de Fase 7 | OPEN/CLOSE y state report |
