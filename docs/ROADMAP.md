@@ -479,19 +479,23 @@ Antes de implementar el backlog de producto, completar las fases 0–7 de `PLAN_
 
 ### Prioridad media — capability discovery y extensibilidad
 
+La especificación detallada está en [`docs/universal-protocol/CAPABILITY_DISCOVERY.md`](universal-protocol/CAPABILITY_DISCOVERY.md). Ese documento conserva la idea original completa, distingue el estado real V4 del diseño propuesto y define wire contract, IDs iniciales, registry, compatibilidad, API candidata, MQTT adapter, etapas y pruebas.
+
 **Objetivo:** que la central conozca las capacidades reales de cada dispositivo y permita añadir perfiles sin crear protocolos paralelos.
 
-**Pasos:**
+**Estado actual real:** V4 tiene `HELLO`, `DeviceType` y un tag `CAPABILITY` declarado, pero no transmite, parsea, almacena ni publica capabilities. `HELLO_ACK` tampoco es hoy un handshake de aplicación; el ACK existente es automático y de protocolo.
 
-1. Definir un formato de capabilities versionado dentro de HELLO o de un mensaje de discovery.
-2. Separar capacidad declarada, capacidad disponible y estado actual.
-3. Definir cómo se representan capacidades desconocidas y cambios de firmware.
-4. Hacer que la central seleccione handlers por capability, no por nombres hardcodeados.
-5. Validar con al menos dos perfiles distintos, por ejemplo sensor y actuador.
+**Implementación futura resumida:**
 
-**Criterios de aceptación:** la central identifica capacidades sin conocer pines ni lógica de producto, ignora extensiones desconocidas de forma segura y no rompe nodos antiguos.
+1. Congelar el registro V1 y probar TLV repetidos `CAPABILITY` de un byte dentro de `HELLO`.
+2. Separar capability declarada, evento, estado, `DeviceType` y autorización.
+3. Añadir almacenamiento de capabilities al registry sin romper nodos V4 antiguos.
+4. Hacer que la central seleccione handlers/adapters por capability, no por nombres hardcodeados.
+5. Validar dos perfiles distintos, por ejemplo `MOTION + TEMPERATURE + BATTERY` y `DOOR + BATTERY`.
 
-**Estado:** MEJORA / PROPUESTO. **Dependencias:** contrato HELLO, versionado y pruebas de compatibilidad.
+**Criterios de aceptación:** la central identifica capacidades sin conocer pines ni lógica de producto, ignora extensiones desconocidas de forma segura, reemplaza el conjunto al cambiar de sesión y no rompe nodos antiguos.
+
+**Estado:** MEJORA / PROPUESTA IMPLEMENTABLE; no aplicada. **Dependencias:** contrato HELLO, versionado, auth temprana, registry y pruebas de compatibilidad.
 
 ### Prioridad media — dashboard y adapter MQTT/Home Assistant
 

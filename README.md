@@ -36,6 +36,7 @@ Sistema modular de alarma y sensores IoT usando ESP8266 con protocolo propio sob
 | [**ANALISIS_INICIAL_HALLAZGOS.md**](docs/ANALISIS_INICIAL_HALLAZGOS.md) | Snapshot auditable del análisis, hallazgos y método para comparar ideas futuras |
 | [**universal-protocol/**](docs/universal-protocol/) | Meta-prompt, unificación y auditoría de los drafts para diseñar el protocolo universal |
 | [**INFORME_DRAFTS_RESTANTES.md**](docs/universal-protocol/INFORME_DRAFTS_RESTANTES.md) | Trazabilidad de los cinco drafts restantes, bugs históricos y backlog futuro |
+| [**CAPABILITY_DISCOVERY.md**](docs/universal-protocol/CAPABILITY_DISCOVERY.md) | Especificación futura implementable del sistema de capacidades |
 | [**CHANGELOG.md**](docs/CHANGELOG.md) | Historial completo de versiones (V3.1 → V4.3) |
 | [**BUGS_FIXED.md**](docs/BUGS_FIXED.md) | Bugs históricos con estados de evidencia, causas y reglas preventivas |
 | [**PLAN_EJECUCION_FUTURA.md**](docs/PLAN_EJECUCION_FUTURA.md) | Estado técnico y orden seguro para continuar el desarrollo |
@@ -88,7 +89,9 @@ wifi_PIR/
 │   ├── ANALISIS_INICIAL_HALLAZGOS.md
 │   ├── universal-protocol/
 │   │   ├── META_PROMPT.md
-│   │   └── INFORME_UNIFICACION.md
+│   │   ├── INFORME_UNIFICACION.md
+│   │   ├── INFORME_DRAFTS_RESTANTES.md
+│   │   └── CAPABILITY_DISCOVERY.md
 │   ├── CHANGELOG.md
 │   ├── BUGS_FIXED.md
 │   ├── PLAN_EJECUCION_FUTURA.md

@@ -210,7 +210,7 @@ No se deben introducir `zona`, `ARM_HOME` o estados de alarma en el Core solo po
 |---|---|---|---|
 | Configuración centralizada persistente | MEJORA | `COMMAND`/`CONFIG` y `IoTStorage` | Existe configuración básica, falta flujo completo y auth temprana |
 | Añadir sensores sin cambiar el protocolo | INTEGRADA como objetivo | Perfiles y tipos extensibles | Objetivo arquitectónico; no demostrado por una segunda familia real |
-| Capability discovery | MEJORA | `HELLO`/perfil universal | Tipos de discovery existen; contrato completo pendiente |
+| Capability discovery | MEJORA | [`CAPABILITY_DISCOVERY.md`](CAPABILITY_DISCOVERY.md), `HELLO`/perfiles | Contrato propuesto; implementación y decisiones finales pendientes |
 | Convertir `IoTProtocol` en protocolo propio estándar | VARIANTE | Evaluación V5 | No adoptar automáticamente; comparar codec, transporte y seguridad |
 | Relé y comandos | MEJORA | Perfil actuador | Tipos existen; flujo central→nodo→respuesta incompleto |
 
@@ -237,7 +237,7 @@ Una futura versión solo se nombra cuando sus criterios de aceptación están de
 | D-006 | Zonas y modos de armado | `ideas.md` | NUEVA | Perfil alarma | Estado de alarma y config auth | Mensaje de zona/mode validado |
 | D-007 | Configuración remota completa | `ideas.md` | MEJORA | `COMMAND`/`CONFIG` | Auth temprana, persistencia y rollback | Set/get autenticado y durable |
 | D-008 | OTA con integridad y rollback | `ideas.md` | MEJORA | Plataforma/operación | Firma, watchdog, recuperación | Imagen inválida rechazada; fallo recuperable |
-| D-009 | Capability discovery | `ideas.md` | MEJORA | Core/perfil | Contrato HELLO y unknown fields | Central identifica capacidades reales |
+| D-009 | Capability discovery | `ideas.md` | MEJORA | [`CAPABILITY_DISCOVERY.md`](CAPABILITY_DISCOVERY.md), Core/perfiles | Contrato HELLO, registry, unknown fields y adapter | Dos perfiles anuncian y la central consulta capacidades sin tabla por dispositivo |
 | D-010 | Telemetría y dashboard | `ideas.md` | MEJORA/NUEVA | Adapter MQTT/HA | Schema estable, discovery probado | Estado visible y retained validado |
 | D-011 | Evaluación de protocolo universal propio | `ideas.md` | VARIANTE | `INFORME_UNIFICACION.md`, V5 | Benchmarks y requisitos | Matriz comparativa antes de elegir |
 
@@ -261,7 +261,8 @@ La integración queda distribuida así:
 1. `docs/BUGS_FIXED.md`: hechos históricos, síntomas, causas, reglas y estado real de BUG-001…BUG-011.
 2. `docs/PLAN_EJECUCION_FUTURA.md`: gates técnicos y Fase 8 de sirena; no se modifica firmware como parte de esta auditoría.
 3. `docs/ROADMAP.md`: backlog de event log, estados, zonas, capabilities, telemetría, configuración y OTA, con dependencias.
-4. `docs/ANALISIS_INICIAL_HALLAZGOS.md`: método de futuras ideas y referencia a este informe.
+4. `docs/universal-protocol/CAPABILITY_DISCOVERY.md`: especificación implementable de la idea de capabilities, separada del código actual.
+5. `docs/ANALISIS_INICIAL_HALLAZGOS.md`: método de futuras ideas y referencia a este informe.
 5. `docs/universal-protocol/INFORME_UNIFICACION.md`: referencia a esta auditoría complementaria.
 6. `_drafts/`: se conserva como evidencia de procedencia y no como fuente de estado actual.
 
