@@ -1,4 +1,5 @@
 #include "config.h"
+#include <IoTProtocol.h>
 
 // --- Red ---
 const char* ssid = WIFI_SSID;

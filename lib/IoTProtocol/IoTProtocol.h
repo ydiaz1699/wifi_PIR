@@ -76,7 +76,7 @@ enum class MsgType : uint8_t {
     DATA        = 0x02,   // Sensor → Central: datos continuos (temperatura, humedad)
     COMMAND     = 0x03,   // Central → Actuador: orden (relé ON, LED toggle)
     RESPONSE    = 0x04,   // Actuador → Central: resultado de ejecución del comando
-    DISPLAY     = 0x05,   // Central → Display: texto/datos para LCD
+    DISPLAY_MSG = 0x05,   // Central → Display: texto/datos para LCD
 
     // Control
     ACK         = 0x10,   // Confirmación de recepción (protocolo, NO ejecución)

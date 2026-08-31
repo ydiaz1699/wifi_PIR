@@ -10,6 +10,7 @@
  */
 
 #include "IoTNode.h"
+#include <ESP8266WiFi.h>
 #include <string.h>
 
 // ============================================================
