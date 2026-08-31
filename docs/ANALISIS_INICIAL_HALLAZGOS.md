@@ -9,6 +9,7 @@ Este documento existe para que una sesión futura pueda retomar el análisis sin
 - el código real es la fuente de verdad del comportamiento implementado;
 - `docs/PLAN_EJECUCION_FUTURA.md` es la guía de ejecución por fases;
 - este archivo conserva el diagnóstico, la trazabilidad de los hallazgos y el método para evaluar nuevas ideas;
+- la auditoría específica de los cinco drafts restantes y su backlog está en [`docs/universal-protocol/INFORME_DRAFTS_RESTANTES.md`](universal-protocol/INFORME_DRAFTS_RESTANTES.md);
 - `docs/ARCHITECTURE.md`, `CHANGELOG.md` y `ROADMAP.md` describen arquitectura, historia y trabajo previsto, respectivamente.
 
 El análisis original fue estático. No se ejecutaron compilaciones, pruebas host, flasheos, pruebas de red, MQTT, OTA ni pruebas con hardware. Toda afirmación de funcionamiento real debe verificarse antes de marcarla como confirmada.
@@ -109,7 +110,7 @@ La matriz separa comportamiento observado de solución propuesta. Las propuestas
 | H-010 | V3 deduplicación | La deduplicación usa IP/event ID y no tiene `BOOT_ID` | Tras reinicio puede coincidir con una ventana anterior | Limitación V3 | Determinar si V3 se conserva así o se migra con compatibilidad |
 | H-011 | Bocina | `timedOn()` usa un temporizador único; un evento posterior sobrescribe el plazo anterior | PIR y timbre son independientes en red, pero no pueden mantener patrones acústicos concurrentes | Riesgo funcional | Definir cola/prioridad de patrones sin bloquear UDP |
 | H-012 | MQTT V3 | Hay declaraciones `static` separadas del contador de fallos dentro de ramas diferentes | El conteo y el reinicio de fallos pueden no afectar a la misma variable | Sospecha de bug | Confirmar alcance de variables y probar caída/recuperación del broker |
-| H-013 | Documentación | `README.md` enlaza `docs/BUGS_FIXED.md`, pero el archivo no está en el árbol actual | Una referencia de continuidad está rota | Confirmado documental | Corregir enlace o restaurar un documento sin inventar contenido histórico |
+| H-013 | Documentación | `README.md` enlazaba `docs/BUGS_FIXED.md`, que no existía en el árbol inicial | Una referencia de continuidad estaba rota | Corregido documentalmente | Mantener `docs/BUGS_FIXED.md` con estados de evidencia y procedencia histórica |
 | H-014 | Declaraciones históricas | `CHANGELOG.md` presenta “BOOT_ID persistente” y “auth logic unificada” como completados | El historial puede inducir a confiar en propiedades aún parciales | Divergencia código/documentación | Marcar la implementación real y añadir referencia a este análisis |
 | H-015 | MQTT/HA | No existe evidencia en el repositorio de una prueba real completa de discovery retained y entidades Home Assistant | La integración está documentada pero no demostrada | No verificado | Probar broker, discovery, entidades y registrar resultados |
 | H-016 | OTA | Hay configuración OTA para receptores, pero no evidencia de prueba en la red real | OTA puede depender de firewall, rutas y configuración externa | No verificado | Probar desde el equipo real y documentar firewall/resultado |
@@ -312,11 +313,11 @@ No implementar nuevas ideas directamente sobre V3 si todavía no se ha identific
 
 ## 10. Registro de ideas futuras
 
-Este registro se mantiene deliberadamente vacío hasta que el usuario comparta ideas concretas. Cada entrada debe enlazar a su sección detallada y conservar su estado.
+Este registro ya incluye las ideas históricas auditadas. La matriz completa, con procedencia, clasificación, destino, dependencias y criterios de aceptación, está en [`universal-protocol/INFORME_DRAFTS_RESTANTES.md`](universal-protocol/INFORME_DRAFTS_RESTANTES.md). Las ideas nuevas deben seguir la plantilla de la sección 8 y no reemplazar entradas previas.
 
 | ID | Fecha | Título | Clasificación | Madurez | Estado |
 |---|---|---|---|---|---|
-| — | — | No hay ideas registradas todavía | — | — | Pendiente de aportes del usuario |
+| D-001…D-011 | 2026-08-31 | Sirena, bugs, event log, estados, zonas, config, capabilities, telemetría, OTA y evaluación V5 | Mixta: integrada / mejora / nueva / variante | M1–M2 según subidea | Backlog documentado; no implica implementación |
 
 ## 11. Regla de actualización
 
