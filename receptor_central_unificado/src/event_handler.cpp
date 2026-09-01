@@ -29,7 +29,7 @@ static const char* eventCodeToStr(EventCode code) {
         case EventCode::SMOKE:        return "SMOKE";
         case EventCode::FLOOD:        return "FLOOD";
         case EventCode::TAMPER:       return "TAMPER";
-        case EventCode::LOW_BATTERY:  return "LOW_BATTERY";
+        case EventCode::LOW_BATTERY: return "LOW_BATTERY";
         default:                      return "UNKNOWN";
     }
 }

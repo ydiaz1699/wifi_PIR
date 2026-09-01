@@ -71,24 +71,50 @@ void IoTAuth::_computeHmac(const IoTPacket &pkt, uint8_t payloadLenForHash, uint
 // ============================================================
 
 bool IoTAuth::signPacket(IoTPacket &pkt) {
-    // Verificar que hay espacio para el TLV de auth (tag:1 + len:1 + value:4 = 6 bytes)
-    if ((uint16_t)pkt.payloadLen + 2 + IOT_HMAC_TRUNC_SIZE > IOT_MAX_PAYLOAD) {
-        return false;  // No hay espacio
+    // La firma debe ser idempotente: IoTNode puede recibir un paquete que un
+    // caller legacy ya firmó antes de entregarlo a sendDirect/enqueue.
+    if (pkt.payloadLen > IOT_MAX_PAYLOAD) return false;
+    uint8_t offset = 0;
+    uint8_t authOffset = 0;
+    uint8_t authCount = 0;
+    while (offset < pkt.payloadLen) {
+        if ((uint16_t)offset + 2 > pkt.payloadLen) return false;
+        const uint8_t tag = pkt.payload[offset];
+        const uint8_t len = pkt.payload[offset + 1];
+        if ((uint16_t)offset + 2 + len > pkt.payloadLen) return false;
+        if (tag == IOT_TLV_AUTH_HMAC4) {
+            if (len != IOT_HMAC_TRUNC_SIZE) return false;
+            authOffset = offset;
+            authCount++;
+        }
+        offset = (uint8_t)(offset + 2 + len);
     }
 
-    // Calcular HMAC sobre el payload actual (sin el auth TLV)
-    uint8_t hmac[IOT_HMAC_TRUNC_SIZE];
-    _computeHmac(pkt, pkt.payloadLen, hmac);
+    if (authCount > 1) return false;
+    if (authCount == 1 && (uint16_t)authOffset + 2 + IOT_HMAC_TRUNC_SIZE != pkt.payloadLen) {
+        // Nunca firmar un payload con TLV posterior al HMAC.
+        return false;
+    }
 
-    // Agregar TLV AUTH_HMAC4
+    uint8_t hmac[IOT_HMAC_TRUNC_SIZE];
+    if (authCount == 1) {
+        _computeHmac(pkt, authOffset, hmac);
+        memcpy(&pkt.payload[authOffset + 2], hmac, IOT_HMAC_TRUNC_SIZE);
+        pkt.flags |= IOT_FLAG_AUTHENTICATED;
+        return true;
+    }
+
+    if ((uint16_t)pkt.payloadLen + 2 + IOT_HMAC_TRUNC_SIZE > IOT_MAX_PAYLOAD) {
+        return false;
+    }
+
+    // Calcular HMAC sobre el payload actual (sin el auth TLV).
+    _computeHmac(pkt, pkt.payloadLen, hmac);
     pkt.payload[pkt.payloadLen++] = IOT_TLV_AUTH_HMAC4;
     pkt.payload[pkt.payloadLen++] = IOT_HMAC_TRUNC_SIZE;
     memcpy(&pkt.payload[pkt.payloadLen], hmac, IOT_HMAC_TRUNC_SIZE);
     pkt.payloadLen += IOT_HMAC_TRUNC_SIZE;
-
-    // Setear flag
     pkt.flags |= IOT_FLAG_AUTHENTICATED;
-
     return true;
 }
 
@@ -97,45 +123,48 @@ bool IoTAuth::signPacket(IoTPacket &pkt) {
 // ============================================================
 
 bool IoTAuth::verifyPacket(const IoTPacket &pkt) {
-    // Si no tiene el flag de auth
-    if (!isAuthenticated(pkt)) {
-        return !_required;  // Si auth es requerido → false; si opcional → true
-    }
-
-    // Buscar el TLV AUTH_HMAC4 en el payload
-    // Debe ser el último TLV (lo agregamos al final en signPacket)
+    if (pkt.payloadLen > IOT_MAX_PAYLOAD) return false;
     uint8_t offset = 0;
     uint8_t authOffset = 0;
-    bool found = false;
+    uint8_t authCount = 0;
 
-    while (offset + 2 <= pkt.payloadLen) {
-        uint8_t tag = pkt.payload[offset];
-        uint8_t len = pkt.payload[offset + 1];
-        if ((uint16_t)offset + 2 + len > pkt.payloadLen) break;
-
-        if (tag == IOT_TLV_AUTH_HMAC4 && len == IOT_HMAC_TRUNC_SIZE) {
+    while (offset < pkt.payloadLen) {
+        if ((uint16_t)offset + 2 > pkt.payloadLen) return false;
+        const uint8_t tag = pkt.payload[offset];
+        const uint8_t len = pkt.payload[offset + 1];
+        if ((uint16_t)offset + 2 + len > pkt.payloadLen) return false;
+        if (tag == IOT_TLV_AUTH_HMAC4) {
+            if (len != IOT_HMAC_TRUNC_SIZE) return false;
             authOffset = offset;
-            found = true;
+            authCount++;
         }
-        offset += 2 + len;
+        offset = (uint8_t)(offset + 2 + len);
     }
 
-    if (!found) return false;  // Flag dice auth pero no hay TLV
+    const bool markedAuthenticated = isAuthenticated(pkt);
+    if (!markedAuthenticated) {
+        // Un TLV de auth sin flag es inconsistente y no debe degradarse a
+        // paquete anónimo aunque el receptor esté en modo OPTIONAL.
+        if (authCount != 0) return false;
+        return !_required;
+    }
 
-    // Extraer el HMAC recibido
+    // El HMAC cubre exactamente todos los TLV anteriores. Exigir que sea el
+    // último evita aceptar datos agregados después de la parte autenticada.
+    if (authCount != 1 || (uint16_t)authOffset + 2 + IOT_HMAC_TRUNC_SIZE != pkt.payloadLen) {
+        return false;
+    }
+
     uint8_t receivedHmac[IOT_HMAC_TRUNC_SIZE];
     memcpy(receivedHmac, &pkt.payload[authOffset + 2], IOT_HMAC_TRUNC_SIZE);
 
-    // Calcular HMAC sobre el payload SIN el TLV de auth
-    // (todo antes del authOffset)
     uint8_t hmac[IOT_HMAC_TRUNC_SIZE];
     _computeHmac(pkt, authOffset, hmac);
 
-    // Comparación en tiempo constante (previene timing attacks)
+    // Comparación en tiempo constante (previene timing attacks).
     uint8_t diff = 0;
     for (int i = 0; i < IOT_HMAC_TRUNC_SIZE; i++) {
         diff |= hmac[i] ^ receivedHmac[i];
     }
-
-    return (diff == 0);
+    return diff == 0;
 }

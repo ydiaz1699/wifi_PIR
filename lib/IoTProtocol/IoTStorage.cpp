@@ -176,7 +176,7 @@ void IoTStorage::_setDefaults() {
     _config.centralIP = IPAddress(192, 168, 0, 201);
     _config.udpPort = 4210;
     _config.heartbeatIntervalMs = 60000;
-    _config.antireboteMs = 2000;
+    _config.antireboteMs = 200;
     _config.authEnabled = false;
     _config.authKeyLen = 0;
     _config.configVersion = 1;

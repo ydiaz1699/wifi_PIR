@@ -104,6 +104,7 @@ enum class MsgType : uint8_t {
 #define IOT_FLAG_RELIABLE       0x02   // Reintentar con backoff si no hay ACK
 #define IOT_FLAG_URGENT         0x04   // Prioridad URGENT (procesar antes en cola)
 #define IOT_FLAG_BACKGROUND     0x08   // Prioridad baja (descartable si cola llena)
+#define IOT_FLAG_AUTHENTICATED  0x10   // Payload incluye autenticación del proveedor
 // Si ni URGENT ni BACKGROUND: prioridad NORMAL
 
 // ============================================================
