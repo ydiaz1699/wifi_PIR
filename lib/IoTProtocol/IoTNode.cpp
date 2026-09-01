@@ -28,12 +28,19 @@ IoTNode::IoTNode(uint8_t deviceId, uint16_t udpPort)
     memset(&_reliable, 0, sizeof(_reliable));
     memset(&_stats, 0, sizeof(_stats));
     memset(&_rtt, 0, sizeof(_rtt));
+    memset(&_authProvider, 0, sizeof(_authProvider));
+    _authProvider.mode = IoTAuthMode::DISABLED;
     _rtt.minMs = 0xFFFFFFFF;  // Inicializar min alto
 }
 
 void IoTNode::begin() {
     randomSeed(analogRead(A0) ^ micros());
-    _bootId = (uint16_t)(random(1, 65535));
+    begin((uint16_t)random(1, 65535));
+}
+
+void IoTNode::begin(uint16_t bootId) {
+    // BOOT_ID cero está reservado; normalizarlo también protege el fallback.
+    _bootId = bootId == 0 ? 1 : bootId;
     _seq = 0;
     _lastStateCheck = millis();
     _udp.begin(_udpPort);
@@ -74,7 +81,12 @@ void IoTNode::_transmitPacket(const IoTPacket &pkt, IPAddress destIP, uint16_t d
 
 void IoTNode::sendDirect(const IoTPacket &pkt, IPAddress destIP, uint16_t destPort) {
     if (WiFi.status() != WL_CONNECTED) return;
-    _transmitPacket(pkt, destIP, destPort);
+
+    // Copia para conservar la API const y firmar antes de serializar. El
+    // proveedor debe hacer sign idempotente para callers legacy ya firmados.
+    IoTPacket prepared = pkt;
+    if (!_prepareOutgoing(prepared)) return;
+    _transmitPacket(prepared, destIP, destPort);
 }
 
 // ============================================================
@@ -137,6 +149,13 @@ void IoTNode::_processQueue() {
         _reliable.maxAttempts = IOT_MAX_RETRIES;
         _reliable.nextRetryAt = 0;
         _reliable.sentAt = 0;
+        _reliable.expectedBootId = 0;
+        _reliable.expectedBootKnown = false;
+        RemoteDevice *remote = getRemote(entry.pkt.dst);
+        if (remote && remote->bootId != 0) {
+            _reliable.expectedBootId = remote->bootId;
+            _reliable.expectedBootKnown = true;
+        }
         _reliable.active = true;
         _reliable.waitingAck = false;
         _stats.txReliable++;
@@ -185,12 +204,14 @@ int IoTNode::_findLowestPriorityEntry() const {
 }
 
 bool IoTNode::enqueue(IoTPacket &pkt, IPAddress destIP, uint16_t destPort) {
-    Priority pri = pkt.priority();
+    IoTPacket prepared = pkt;
+    if (!_prepareOutgoing(prepared)) return false;
+    Priority pri = prepared.priority();
 
     if (!isQueueFull()) {
         for (int i = 0; i < IOT_QUEUE_SIZE; i++) {
             if (!_queue[i].occupied) {
-                _queue[i].pkt = pkt;
+                _queue[i].pkt = prepared;
                 _queue[i].destIP = destIP;
                 _queue[i].destPort = destPort;
                 _queue[i].priority = pri;
@@ -214,7 +235,7 @@ bool IoTNode::enqueue(IoTPacket &pkt, IPAddress destIP, uint16_t destPort) {
                 }
             }
             if (victim < 0) { _stats.queueDrops++; return false; }
-            _queue[victim].pkt = pkt;
+            _queue[victim].pkt = prepared;
             _queue[victim].destIP = destIP;
             _queue[victim].destPort = destPort;
             _queue[victim].priority = pri;
@@ -225,7 +246,7 @@ bool IoTNode::enqueue(IoTPacket &pkt, IPAddress destIP, uint16_t destPort) {
             int victim = _findLowestPriorityEntry();
             if (victim < 0) { _stats.queueDrops++; return false; }
             if (_queue[victim].priority < pri) { _stats.queueDrops++; return false; }
-            _queue[victim].pkt = pkt;
+            _queue[victim].pkt = prepared;
             _queue[victim].destIP = destIP;
             _queue[victim].destPort = destPort;
             _queue[victim].priority = pri;
@@ -242,59 +263,98 @@ void IoTNode::setOverflowPolicy(QueueOverflow policy) {
 }
 
 // ============================================================
-// Recepción — FIX: ACK se envía SIEMPRE (antes de dedup check)
+// Recepción — drain acotado, ACK antes de dedup
 // ============================================================
 
 void IoTNode::_processIncoming() {
-    int packetSize = _udp.parsePacket();
-    if (!packetSize) return;
-    if (packetSize > (int)sizeof(_rxBuf)) { _udp.flush(); return; }
+    for (uint8_t processed = 0; processed < IOT_MAX_RX_PER_LOOP; processed++) {
+        int packetSize = _udp.parsePacket();
+        if (!packetSize) break;
+        if (packetSize > (int)sizeof(_rxBuf)) {
+            _udp.flush();
+            continue;
+        }
 
-    int len = _udp.read(_rxBuf, sizeof(_rxBuf));
-    if (len <= 0) return;
+        int len = _udp.read(_rxBuf, sizeof(_rxBuf));
+        if (len <= 0) continue;
 
-    IPAddress remoteIP = _udp.remoteIP();
-    uint16_t remotePort = _udp.remotePort();
+        IPAddress remoteIP = _udp.remoteIP();
+        uint16_t remotePort = _udp.remotePort();
 
-    IoTPacket pkt;
-    if (!iot_deserialize(_rxBuf, len, pkt)) return;
+        IoTPacket pkt;
+        if (!iot_deserialize(_rxBuf, len, pkt)) continue;
+        if (pkt.dst != _deviceId && pkt.dst != IOT_DEVICE_BROADCAST) continue;
 
-    if (pkt.dst != _deviceId && pkt.dst != IOT_DEVICE_BROADCAST) return;
+        // La autenticación es la primera operación con efectos potenciales.
+        // Un rechazo no puede ocupar/actualizar registry, enviar ACK,
+        // deduplicar ni llegar al handler de aplicación.
+        if (!_verifyIncoming(pkt, remoteIP, remotePort)) continue;
 
-    _stats.rxPackets++;
+        // BOOT_ID=0 solo existe como sentinel interno de registerRemote();
+        // nunca es una sesión válida en el wire. Rechazarlo aquí evita que
+        // un paquete no-ACK cree registry, dedup o liveness con sesión cero.
+        if (pkt.bootId == 0) {
+            _stats.replays++;
+            continue;
+        }
 
-    // Actualizar tabla de remotos (IP, port, lastSeen)
-    _updateRemote(pkt.src, remoteIP, remotePort, pkt.bootId, pkt.seq);
+        _stats.rxPackets++;
 
-    // ACK propio → procesar contra canal reliable
-    if (pkt.type == MsgType::ACK) {
-        _handleAck(pkt);
-        return;
-    }
+        // Un paquete autenticado puede ser reconocido aunque luego se
+        // descarte por replay; esto detiene reintentos sin ejecutar efectos.
+        if (pkt.type != MsgType::ACK && pkt.needsAck()) {
+            _sendAutoAck(pkt, remoteIP, remotePort);
+        }
 
-    // *** FIX V4.1.1: ACK se envía SIEMPRE, incluso para duplicados ***
-    // Si el emisor retransmite porque no recibió nuestro ACK anterior,
-    // debemos responder ACK de nuevo aunque ya hayamos procesado el evento.
-    if (pkt.needsAck()) {
-        _sendAutoAck(pkt, remoteIP, remotePort);
-    }
+        // Un ACK solo puede confirmar el reliable activo y con SRC/SEQ
+        // coincidentes. En el bootstrap, cuando todavía no hay sesión del
+        // remoto (o solo existe el endpoint registrado con bootId=0), el
+        // propio ACK autenticado/estructural establece el primer BOOT_ID
+        // remoto. Una vez conocido, la validación vuelve a ser estricta.
+        if (pkt.type == MsgType::ACK) {
+            if (_handleAck(pkt, remoteIP, remotePort)) {
+                RemoteDevice* remote = getRemote(pkt.src);
+                if (remote && remote->bootId == pkt.bootId) {
+                    _markRemoteSeen(pkt.src, remoteIP, remotePort);
+                }
+            }
+            continue;
+        }
 
-    // Deduplicación con ventana (solo para reliable)
-    if (pkt.isReliable() && _isDuplicate(pkt.src, pkt.bootId, pkt.seq)) {
-        // ACK ya se envió arriba, pero NO volvemos a procesar el evento
-        _stats.duplicates++;
-        return;
-    }
+        bool sessionChanged = false;
+        // No marcar liveness hasta que dedup acepte el paquete. Así, un
+        // replay antiguo no puede mantener un remoto en ONLINE ni cambiar
+        // su endpoint, aunque sí pueda recibir el ACK protocolario.
+        if (!_updateRemote(pkt.src, remoteIP, remotePort, pkt.bootId, pkt.seq,
+                           &sessionChanged, false)) {
+            // Un paquete autenticado de una sesión anterior no puede mover el
+            // registry hacia atrás ni alcanzar ACK/callback/dedup.
+            _stats.replays++;
+            continue;
+        }
 
-    // Si es HELLO, llenar el registry con la info del dispositivo
-    if (pkt.type == MsgType::HELLO) {
-        RemoteDevice* dev = getRemote(pkt.src);
-        if (dev) _fillRemoteFromHello(*dev, pkt);
-    }
+        // Si el remoto reinició mientras había un reliable en vuelo, su
+        // primer paquete válido establece la nueva sesión para ese canal.
+        if (sessionChanged && _reliable.active &&
+            pkt.src == _reliable.pkt.dst && pkt.bootId != 0) {
+            _reliable.expectedBootId = pkt.bootId;
+            _reliable.expectedBootKnown = true;
+        }
 
-    // Despachar al handler del usuario
-    if (_handler) {
-        _handler(pkt, remoteIP, remotePort);
+        if (pkt.isReliable() && _isDuplicate(pkt.src, pkt.bootId, pkt.seq)) {
+            continue;
+        }
+
+        _markRemoteSeen(pkt.src, remoteIP, remotePort);
+
+        if (pkt.type == MsgType::HELLO) {
+            RemoteDevice* dev = getRemote(pkt.src);
+            if (dev) _fillRemoteFromHello(*dev, pkt);
+        }
+
+        if (_handler) {
+            _handler(pkt, remoteIP, remotePort);
+        }
     }
 }
 
@@ -315,36 +375,74 @@ void IoTNode::_sendAutoAck(const IoTPacket &pkt, IPAddress remoteIP, uint16_t re
     sendDirect(ack, remoteIP, remotePort);
 }
 
-void IoTNode::_handleAck(const IoTPacket &pkt) {
-    if (!_reliable.active || !_reliable.waitingAck) return;
-    if (pkt.seq == _reliable.pkt.seq && pkt.src == _reliable.pkt.dst) {
-        _reliable.active = false;
-        _stats.ackReceived++;
+bool IoTNode::_handleAck(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePort) {
+    if (!_reliable.active || !_reliable.waitingAck) return false;
+    if (pkt.seq != _reliable.pkt.seq || pkt.src != _reliable.pkt.dst) return false;
 
-        // RTT measurement
-        if (_reliable.sentAt > 0) {
-            uint32_t rtt = (uint32_t)(millis() - _reliable.sentAt);
-            _rtt.lastMs = rtt;
-            _rtt.samples++;
-            if (rtt < _rtt.minMs) _rtt.minMs = rtt;
-            if (rtt > _rtt.maxMs) _rtt.maxMs = rtt;
-            // EMA (Exponential Moving Average): avg = avg*0.75 + sample*0.25
-            if (_rtt.samples == 1) {
-                _rtt.avgMs = rtt;
-            } else {
-                _rtt.avgMs = (_rtt.avgMs * 3 + rtt) / 4;
-            }
+    RemoteDevice* remote = getRemote(pkt.src);
+    const bool bootstrap = !_reliable.expectedBootKnown &&
+                           (!remote || remote->bootId == 0);
+
+    if (pkt.bootId == 0 ||
+        (!bootstrap && (!remote || !remote->active ||
+                        pkt.bootId != remote->bootId ||
+                        !_reliable.expectedBootKnown ||
+                        pkt.bootId != _reliable.expectedBootId))) {
+        // BOOT_ID cero está reservado para registerRemote() y nunca puede
+        // autenticar una sesión. Un ACK de sesión antigua, o de un remoto
+        // desconocido fuera de este reliable, tampoco pasa este punto.
+        _stats.replays++;
+        return false;
+    }
+
+    if (bootstrap) {
+        // La autenticación/estructura y la coincidencia SRC/SEQ ya fueron
+        // comprobadas por _processIncoming(). Este es el único caso en que
+        // un ACK puede aprender la sesión del remoto: el reliable está activo,
+        // espera ACK y aún no había BOOT_ID remoto conocido.
+        if (!_updateRemote(pkt.src, remoteIP, remotePort, pkt.bootId, pkt.seq,
+                           nullptr, false)) {
+            _stats.replays++;
+            return false;
+        }
+        remote = getRemote(pkt.src);
+        if (!remote || !remote->active || remote->bootId != pkt.bootId) {
+            _stats.replays++;
+            return false;
+        }
+        _reliable.expectedBootId = pkt.bootId;
+        _reliable.expectedBootKnown = true;
+    }
+
+    _reliable.active = false;
+    _stats.ackReceived++;
+
+    if (_reliable.sentAt > 0) {
+        uint32_t rtt = (uint32_t)(millis() - _reliable.sentAt);
+        _rtt.lastMs = rtt;
+        _rtt.samples++;
+        if (rtt < _rtt.minMs) _rtt.minMs = rtt;
+        if (rtt > _rtt.maxMs) _rtt.maxMs = rtt;
+        if (_rtt.samples == 1) {
+            _rtt.avgMs = rtt;
+        } else {
+            _rtt.avgMs = (_rtt.avgMs * 3 + rtt) / 4;
         }
     }
+    return true;
 }
 
 // ============================================================
-// Deduplicación con VENTANA (Fix V4.1.1)
+// Deduplicación con ventana deslizante y BOOT_ID
 //
-// Mantiene una ventana circular de los últimos IOT_DEDUP_WINDOW SEQ
-// procesados por cada remoto. Si el SEQ entrante está en la ventana,
-// es duplicado. Si BOOT_ID cambió, se resetea la ventana.
+// Bit 0 representa seqHighest y cada bit siguiente un SEQ anterior. Los
+// paquetes fuera de la ventana ya no pueden volver a producir un efecto.
 // ============================================================
+
+static bool seqIsNewer(uint32_t candidate, uint32_t current) {
+    const uint32_t delta = candidate - current;
+    return delta != 0 && delta < 0x80000000UL;
+}
 
 bool IoTNode::_isDuplicate(uint8_t srcId, uint16_t bootId, uint32_t seq) {
     RemoteDevice* dev = nullptr;
@@ -354,79 +452,128 @@ bool IoTNode::_isDuplicate(uint8_t srcId, uint16_t bootId, uint32_t seq) {
             break;
         }
     }
-    if (!dev) return false;  // Dispositivo desconocido → no es duplicado
+    if (!dev || dev->bootId != bootId) {
+        _stats.replays++;
+        return true;
+    }
 
-    // Si BOOT_ID cambió → dispositivo reinició → resetear ventana
-    if (dev->bootId != bootId) {
-        dev->bootId = bootId;
-        dev->seqWindowCount = 0;
-        dev->seqWindowHead = 0;
-        // Insertar este SEQ como el primero
+    if (dev->seqWindowCount == 0 || dev->seqBitmap == 0) {
+        _resetRemoteDedup(*dev, bootId);
+        dev->seqHighest = seq;
+        dev->seqBitmap = 0x01;
         dev->seqWindow[0] = seq;
         dev->seqWindowCount = 1;
         dev->seqWindowHead = 1;
         return false;
     }
 
-    // Buscar en la ventana
-    uint8_t count = dev->seqWindowCount;
-    for (uint8_t i = 0; i < count; i++) {
-        if (dev->seqWindow[i] == seq) return true;  // DUPLICADO
+    if (seqIsNewer(seq, dev->seqHighest)) {
+        const uint32_t advance = seq - dev->seqHighest;
+        if (advance >= IOT_DEDUP_WINDOW) {
+            dev->seqBitmap = 0;
+            dev->seqWindowCount = 0;
+            dev->seqWindowHead = 0;
+        } else {
+            dev->seqBitmap = static_cast<uint8_t>(dev->seqBitmap << advance);
+        }
+        dev->seqHighest = seq;
+        dev->seqBitmap |= 0x01;
+    } else {
+        const uint32_t age = dev->seqHighest - seq;
+        if (age >= IOT_DEDUP_WINDOW) {
+            _stats.replays++;
+            return true;
+        }
+        const uint8_t mask = static_cast<uint8_t>(1U << age);
+        if (dev->seqBitmap & mask) {
+            _stats.duplicates++;
+            return true;
+        }
+        dev->seqBitmap |= mask;
     }
 
-    // No encontrado → nuevo, insertar en ventana circular
     dev->seqWindow[dev->seqWindowHead] = seq;
     dev->seqWindowHead = (dev->seqWindowHead + 1) % IOT_DEDUP_WINDOW;
     if (dev->seqWindowCount < IOT_DEDUP_WINDOW) dev->seqWindowCount++;
-
     return false;
 }
 
 // ============================================================
-// Tabla de remotos — Registry ampliado (Fix V4.1.1)
+// Tabla de remotos y sesión BOOT_ID
 // ============================================================
 
-void IoTNode::_updateRemote(uint8_t srcId, IPAddress ip, uint16_t port,
-                            uint16_t bootId, uint32_t seq) {
-    // Buscar existente
+static bool bootIdIsNewer(uint16_t candidate, uint16_t current) {
+    const uint16_t delta = static_cast<uint16_t>(candidate - current);
+    return delta != 0 && delta < 0x8000U;
+}
+
+void IoTNode::_resetRemoteDedup(RemoteDevice &dev, uint16_t bootId) {
+    dev.bootId = bootId;
+    memset(dev.seqWindow, 0, sizeof(dev.seqWindow));
+    dev.seqWindowCount = 0;
+    dev.seqWindowHead = 0;
+    dev.seqHighest = 0;
+    dev.seqBitmap = 0;
+}
+
+void IoTNode::_markRemoteSeen(uint8_t srcId, IPAddress ip, uint16_t port) {
+    RemoteDevice *remote = getRemote(srcId);
+    if (!remote) return;
+    remote->ip = ip;
+    remote->port = port;
+    remote->lastSeen = millis();
+    remote->state = DeviceState::ONLINE;
+}
+
+bool IoTNode::_updateRemote(uint8_t srcId, IPAddress ip, uint16_t port,
+                            uint16_t bootId, uint32_t seq,
+                            bool *sessionChanged, bool touch) {
+    if (sessionChanged) *sessionChanged = false;
+
     for (int i = 0; i < IOT_MAX_REMOTES; i++) {
-        if (_remotes[i].active && _remotes[i].id == srcId) {
-            _remotes[i].ip = ip;
-            _remotes[i].port = port;
-            _remotes[i].lastSeen = millis();
-            _remotes[i].state = DeviceState::ONLINE;
-            return;
+        if (!_remotes[i].active || _remotes[i].id != srcId) continue;
+
+        // registerRemote() usa bootId=0 para registrar solo el endpoint.
+        if (bootId != 0 && _remotes[i].bootId != 0 &&
+            _remotes[i].bootId != bootId) {
+            if (!bootIdIsNewer(bootId, _remotes[i].bootId)) return false;
+            _resetRemoteDedup(_remotes[i], bootId);
+            if (sessionChanged) *sessionChanged = true;
+        } else if (bootId != 0 && _remotes[i].bootId == 0) {
+            _resetRemoteDedup(_remotes[i], bootId);
+            if (sessionChanged) *sessionChanged = true;
         }
+
+        if (touch) _markRemoteSeen(srcId, ip, port);
+        (void)seq;
+        return true;
     }
-    // Slot libre → crear nuevo
+
     for (int i = 0; i < IOT_MAX_REMOTES; i++) {
         if (!_remotes[i].active) {
             memset(&_remotes[i], 0, sizeof(RemoteDevice));
             _remotes[i].id = srcId;
-            _remotes[i].ip = ip;
-            _remotes[i].port = port;
             _remotes[i].bootId = bootId;
-            _remotes[i].seqWindowCount = 0;
-            _remotes[i].seqWindowHead = 0;
-            _remotes[i].lastSeen = millis();
-            _remotes[i].state = DeviceState::ONLINE;
+            _remotes[i].state = DeviceState::UNKNOWN;
             _remotes[i].active = true;
-            return;
+            if (sessionChanged && bootId != 0) *sessionChanged = true;
+            if (touch) _markRemoteSeen(srcId, ip, port);
+            return true;
         }
     }
-    // Tabla llena: reciclar el más viejo
+
     int oldest = 0;
     for (int i = 1; i < IOT_MAX_REMOTES; i++) {
         if (_remotes[i].lastSeen < _remotes[oldest].lastSeen) oldest = i;
     }
     memset(&_remotes[oldest], 0, sizeof(RemoteDevice));
     _remotes[oldest].id = srcId;
-    _remotes[oldest].ip = ip;
-    _remotes[oldest].port = port;
     _remotes[oldest].bootId = bootId;
-    _remotes[oldest].lastSeen = millis();
-    _remotes[oldest].state = DeviceState::ONLINE;
+    _remotes[oldest].state = DeviceState::UNKNOWN;
     _remotes[oldest].active = true;
+    if (sessionChanged && bootId != 0) *sessionChanged = true;
+    if (touch) _markRemoteSeen(srcId, ip, port);
+    return true;
 }
 
 void IoTNode::_fillRemoteFromHello(RemoteDevice &dev, const IoTPacket &pkt) {
@@ -556,6 +703,50 @@ void IoTNode::sendHello(IPAddress destIP, uint16_t destPort,
 
 void IoTNode::onPacketReceived(IoTPacketHandler handler) {
     _handler = handler;
+}
+
+void IoTNode::setAuthProvider(const IoTAuthProvider &provider) {
+    _authProvider = provider;
+    if (_authProvider.mode == IoTAuthMode::DISABLED) {
+        // DISABLED es un bypass total aunque el caller deje callbacks.
+        _authProvider.signOutgoing = false;
+    }
+}
+
+void IoTNode::clearAuthProvider() {
+    memset(&_authProvider, 0, sizeof(_authProvider));
+    _authProvider.mode = IoTAuthMode::DISABLED;
+}
+
+bool IoTNode::_verifyIncoming(const IoTPacket &pkt, IPAddress remoteIP,
+                              uint16_t remotePort) {
+    if (_authProvider.mode == IoTAuthMode::DISABLED) return true;
+
+    const bool markedAuthenticated = (pkt.flags & IOT_FLAG_AUTHENTICATED) != 0;
+    bool accepted = false;
+    if (!markedAuthenticated && _authProvider.mode == IoTAuthMode::OPTIONAL) {
+        accepted = true;
+    } else if (_authProvider.verify) {
+        accepted = _authProvider.verify(pkt, _authProvider.context);
+    }
+
+    if (!accepted && _authProvider.onRejected) {
+        // Callback diagnóstico: se invoca después del parse y antes de todos
+        // los efectos internos de recepción.
+        _authProvider.onRejected(pkt, remoteIP, remotePort);
+    }
+    return accepted;
+}
+
+bool IoTNode::_prepareOutgoing(IoTPacket &pkt) {
+    if (_authProvider.mode == IoTAuthMode::DISABLED) return true;
+
+    // REQUIRED implica firma saliente aunque signOutgoing no se haya marcado.
+    const bool mustSign = _authProvider.signOutgoing ||
+                          _authProvider.mode == IoTAuthMode::REQUIRED;
+    if (!mustSign) return true;
+    if (!_authProvider.sign) return false;
+    return _authProvider.sign(pkt, _authProvider.context);
 }
 
 bool IoTNode::sendEvent(EventCode event, IPAddress destIP, uint16_t destPort, uint8_t destId) {

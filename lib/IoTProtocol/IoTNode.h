@@ -6,9 +6,11 @@
  * - 3 prioridades: URGENT > NORMAL > BACKGROUND
  * - Un solo paquete reliable en vuelo a la vez (simplifica ACK tracking)
  * - Buffering sin WiFi: encolar aunque no haya conexión, enviar cuando vuelva
- * - Deduplicación con BOOT_ID (resuelve reinicio + SEQ vuelve a 1)
+ * - Deduplicación con BOOT_ID + ventana deslizante de SEQ (incluye replay antiguo)
+ * - ACKs ligados a la sesión BOOT_ID conocida del remoto
+ * - Recepción UDP acotada por iteración para no monopolizar loop()
  * - Política de overflow: URGENT nunca se descarta, BACKGROUND sí
- * - BOOT_ID generado al boot (random)
+ * - BOOT_ID proporcionado por el firmware o generado aleatoriamente como fallback
  *
  * Uso:
  *   IoTNode node(MY_DEVICE_ID, UDP_PORT);
@@ -29,6 +31,7 @@
 #define IOT_MAX_REMOTES       8     // Tabla de dispositivos remotos
 #define IOT_MAX_RETRIES       5     // Reintentos para reliable
 #define IOT_DEDUP_WINDOW      8     // Ventana de deduplicación (últimos N SEQ por remoto)
+#define IOT_MAX_RX_PER_LOOP   8     // Máximo de datagramas UDP procesados por loop()
 
 // Timeouts (ms)
 #define IOT_ACK_TIMEOUT_BASE    300
@@ -52,6 +55,40 @@ enum class QueueOverflow : uint8_t {
 // ============================================================
 
 typedef void (*IoTPacketHandler)(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePort);
+
+// ============================================================
+// Proveedor de autenticación
+// ============================================================
+
+/**
+ * Política de autenticación aplicada en la frontera de IoTNode.
+ * DISABLED es un bypass completo y no invoca callbacks.
+ */
+enum class IoTAuthMode : uint8_t {
+    DISABLED = 0,
+    OPTIONAL = 1,  // Paquetes sin auth pasan; los marcados deben verificarse.
+    REQUIRED = 2,  // Todo paquete entrante y saliente debe estar autenticado.
+};
+
+typedef bool (*IoTAuthVerifyCallback)(const IoTPacket &pkt, void *context);
+typedef bool (*IoTAuthSignCallback)(IoTPacket &pkt, void *context);
+typedef void (*IoTAuthRejectedHandler)(const IoTPacket &pkt,
+                                       IPAddress remoteIP,
+                                       uint16_t remotePort);
+
+/**
+ * Adaptador de autenticación sin acoplar IoTNode a HMAC, BearSSL u otro
+ * proveedor. El callback de firma debe ser idempotente para permitir que
+ * callers antiguos entreguen paquetes ya firmados sin doble firma.
+ */
+struct IoTAuthProvider {
+    IoTAuthMode mode;
+    bool signOutgoing;
+    IoTAuthVerifyCallback verify;
+    IoTAuthSignCallback sign;
+    IoTAuthRejectedHandler onRejected;
+    void *context;
+};
 
 // ============================================================
 // Estado de conexión de un dispositivo remoto
@@ -78,6 +115,8 @@ struct RemoteDevice {
     uint32_t  seqWindow[IOT_DEDUP_WINDOW];
     uint8_t   seqWindowCount;   // Cuántos hay en la ventana (0–IOT_DEDUP_WINDOW)
     uint8_t   seqWindowHead;    // Índice circular para insertar el siguiente
+    uint32_t  seqHighest;       // Mayor SEQ aceptado en la sesión actual
+    uint8_t   seqBitmap;        // Bit 0=seqHighest; bits siguientes=SEQ anteriores
 
     // Registry (se llena con HELLO)
     DeviceType deviceType;
@@ -115,6 +154,8 @@ struct ReliableChannel {
     uint8_t   maxAttempts;
     unsigned long nextRetryAt; // millis() del próximo envío/reintento
     unsigned long sentAt;      // millis() cuando se envió (para RTT)
+    uint16_t expectedBootId;   // Sesión del remoto conocida al iniciar este reliable
+    bool      expectedBootKnown;
     bool      active;          // Hay algo en vuelo
     bool      waitingAck;      // Esperando ACK
 };
@@ -131,6 +172,7 @@ struct IoTStats {
     uint32_t ackTimeouts;     // Reliable que fallaron (sin ACK tras N intentos)
     uint32_t retries;         // Reintentos individuales
     uint32_t duplicates;      // Paquetes duplicados descartados
+    uint32_t replays;         // Paquetes fuera de sesión/ventana descartados
     uint32_t crcErrors;       // Paquetes con CRC inválido (contados en deserialize)
     uint32_t queueDrops;      // Eventos no encolados (cola llena)
     uint32_t queueOverflows;  // Eventos que desplazaron otro (overflow policy)
@@ -157,7 +199,10 @@ public:
     IoTNode(uint8_t deviceId, uint16_t udpPort);
 
     // --- Inicialización ---
+    // Genera un BOOT_ID aleatorio para consumidores legacy.
     void begin();
+    // Usa un BOOT_ID persistente proporcionado por el firmware.
+    void begin(uint16_t bootId);
 
     // --- Loop (llamar cada iteración) ---
     void loop();
@@ -193,6 +238,12 @@ public:
     // --- Callback ---
     void onPacketReceived(IoTPacketHandler handler);
 
+    // --- Autenticación ---
+    // Copia el proveedor; puede reemplazarse en runtime tras un cambio de config.
+    void setAuthProvider(const IoTAuthProvider &provider);
+    void clearAuthProvider();
+    IoTAuthMode getAuthMode() const { return _authProvider.mode; }
+
     // --- Configuración ---
     void setOverflowPolicy(QueueOverflow policy);
 
@@ -212,6 +263,7 @@ public:
 
     // --- Remotos ---
     RemoteDevice* getRemote(uint8_t id);
+    // Registra solo endpoint; bootId=0 es sentinel interno, no sesión wire.
     void registerRemote(uint8_t id, IPAddress ip, uint16_t port);
     uint8_t getRemoteCount() const;
     void updateDeviceStates();  // Llamar periódicamente para ONLINE→STALE→OFFLINE
@@ -219,9 +271,9 @@ public:
 private:
     uint8_t  _deviceId;
     uint16_t _udpPort;
-    uint16_t _bootId;      // Random al begin()
+    uint16_t _bootId;      // Persistente si lo proporciona el firmware; aleatorio como fallback
     uint32_t _seq;
-    WiFiUDP  _udp;
+    WiFiUDP _udp;
 
     // Cola FIFO
     QueueEntry _queue[IOT_QUEUE_SIZE];
@@ -251,6 +303,9 @@ private:
     // Callback
     IoTPacketHandler _handler;
 
+    // Proveedor de autenticación (DISABLED por defecto para compatibilidad)
+    IoTAuthProvider _authProvider;
+
     // Buffer de recepción
     uint8_t _rxBuf[IOT_MAX_PACKET];
 
@@ -260,12 +315,18 @@ private:
     void _processReliable();
     void _sendHeartbeat();
     void _updateDeviceStates();
-    void _handleAck(const IoTPacket &pkt);
+    bool _handleAck(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePort);
     void _sendAutoAck(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePort);
     bool _isDuplicate(uint8_t srcId, uint16_t bootId, uint32_t seq);
-    void _updateRemote(uint8_t srcId, IPAddress ip, uint16_t port, uint16_t bootId, uint32_t seq);
+    bool _updateRemote(uint8_t srcId, IPAddress ip, uint16_t port,
+                       uint16_t bootId, uint32_t seq,
+                       bool *sessionChanged = nullptr, bool touch = true);
+    void _markRemoteSeen(uint8_t srcId, IPAddress ip, uint16_t port);
+    void _resetRemoteDedup(RemoteDevice &dev, uint16_t bootId);
     void _fillRemoteFromHello(RemoteDevice &dev, const IoTPacket &pkt);
     void _transmitPacket(const IoTPacket &pkt, IPAddress destIP, uint16_t destPort);
+    bool _verifyIncoming(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePort);
+    bool _prepareOutgoing(IoTPacket &pkt);
     int  _findHighestPriorityEntry() const;
     int  _findLowestPriorityEntry() const;
     unsigned long _calcBackoff(uint8_t attempt);

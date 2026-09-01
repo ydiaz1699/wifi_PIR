@@ -10,14 +10,20 @@
  * - Se agrega como TLV tag AUTH_HMAC4 al payload antes de serializar
  * - El receptor verifica el HMAC antes de procesar
  *
- * Uso:
- *   // Emisor (antes de enviar):
- *   IoTAuth auth(sharedKey, 16);
+ * Uso recomendado en V4:
+ *   IoTAuth auth(key, keyLen);
+ *   IoTAuthProvider provider{IoTAuthMode::REQUIRED, true, verifyCb,
+ *                            signCb, nullptr, &auth};
+ *   node.setAuthProvider(provider);
+ *
+ * `signPacket()` es idempotente para que IoTNode pueda ser la única frontera
+ * de firma aunque callers legacy entreguen un paquete ya firmado.
+ *
+ * Uso directo (compatibilidad):
  *   auth.signPacket(pkt);     // Agrega AUTH_HMAC4 al payload
  *
- *   // Receptor (al recibir):
- *   if (!auth.verifyPacket(pkt)) { reject; }
- *
+ * En recepción, la verificación debe configurarse en IoTNode; no repetirla
+ * dentro del handler, porque sería posterior a registry/ACK/deduplicación.
  * Seguridad:
  * - Previene: vecino inyectando paquetes falsos
  * - NO previene: replay (ya cubierto por SEQ + BOOT_ID + dedup window)
@@ -31,9 +37,8 @@
 #pragma once
 #include "IoTProtocol.h"
 
-// Flag adicional para autenticación
-#define IOT_FLAG_AUTHENTICATED  0x10
-
+// Flag adicional para autenticación se define en IoTProtocol.h para que
+// IoTNode pueda aplicar la política antes de cualquier efecto de recepción.
 // TLV tag para el HMAC truncado (4 bytes)
 // Definido en rango 0xF0–0xFF (seguridad)
 #define IOT_TLV_AUTH_HMAC4  0xF0
