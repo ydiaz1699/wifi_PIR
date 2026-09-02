@@ -3,11 +3,12 @@
  *
  * El receptor NO necesita saber de antemano qué sensores existen.
  * Cualquier dispositivo que envíe un EVENT válido será procesado.
- * La acción depende del EventCode y del modo actual (armado/desarmado).
+ * La acción depende del AlarmProfile::EventCode y del modo actual (armado/desarmado).
  * V4.3: verifica HMAC si auth está habilitado.
  */
 
 #include "event_handler.h"
+#include <AlarmProfile.h>
 #include "hal.h"
 #include "config.h"
 #include "logger.h"
@@ -19,46 +20,46 @@ extern bool mqttDisponible;
 extern String modoAlarma;
 
 // --- Nombres para log ---
-static const char* eventCodeToStr(EventCode code) {
+static const char* eventCodeToStr(AlarmProfile::EventCode code) {
     switch (code) {
-        case EventCode::MOTION:       return "MOTION";
-        case EventCode::DOOR_OPEN:    return "DOOR_OPEN";
-        case EventCode::DOOR_CLOSE:   return "DOOR_CLOSE";
-        case EventCode::BUTTON_PRESS: return "BUTTON_PRESS";
-        case EventCode::TIMBRE:       return "TIMBRE";
-        case EventCode::SMOKE:        return "SMOKE";
-        case EventCode::FLOOD:        return "FLOOD";
-        case EventCode::TAMPER:       return "TAMPER";
-        case EventCode::LOW_BATTERY: return "LOW_BATTERY";
+        case AlarmProfile::EventCode::MOTION:       return "MOTION";
+        case AlarmProfile::EventCode::DOOR_OPEN:    return "DOOR_OPEN";
+        case AlarmProfile::EventCode::DOOR_CLOSE:   return "DOOR_CLOSE";
+        case AlarmProfile::EventCode::BUTTON_PRESS: return "BUTTON_PRESS";
+        case AlarmProfile::EventCode::TIMBRE:       return "TIMBRE";
+        case AlarmProfile::EventCode::SMOKE:        return "SMOKE";
+        case AlarmProfile::EventCode::FLOOD:        return "FLOOD";
+        case AlarmProfile::EventCode::TAMPER:       return "TAMPER";
+        case AlarmProfile::EventCode::LOW_BATTERY: return "LOW_BATTERY";
         default:                      return "UNKNOWN";
     }
 }
 
 // --- Duración de bocina por tipo de evento ---
-static unsigned long duracionPorEvento(EventCode code) {
+static unsigned long duracionPorEvento(AlarmProfile::EventCode code) {
     switch (code) {
-        case EventCode::MOTION:       return DURACION_BOCINA_MOTION_MS;
-        case EventCode::TIMBRE:       return DURACION_BOCINA_TIMBRE_MS;
-        case EventCode::BUTTON_PRESS: return DURACION_BOCINA_TIMBRE_MS;
-        case EventCode::DOOR_OPEN:    return DURACION_BOCINA_PUERTA_MS;
-        case EventCode::SMOKE:        return 5000;
-        case EventCode::FLOOD:        return 3000;
+        case AlarmProfile::EventCode::MOTION:       return DURACION_BOCINA_MOTION_MS;
+        case AlarmProfile::EventCode::TIMBRE:       return DURACION_BOCINA_TIMBRE_MS;
+        case AlarmProfile::EventCode::BUTTON_PRESS: return DURACION_BOCINA_TIMBRE_MS;
+        case AlarmProfile::EventCode::DOOR_OPEN:    return DURACION_BOCINA_PUERTA_MS;
+        case AlarmProfile::EventCode::SMOKE:        return 5000;
+        case AlarmProfile::EventCode::FLOOD:        return 3000;
         default:                      return DURACION_BOCINA_TIMBRE_MS;
     }
 }
 
 // --- ¿Activar bocina? Depende del modo ---
-static bool debeActivarBocina(EventCode code) {
+static bool debeActivarBocina(AlarmProfile::EventCode code) {
     // Siempre suenan (no dependen del modo)
-    if (code == EventCode::TIMBRE || code == EventCode::BUTTON_PRESS) return true;
-    if (code == EventCode::SMOKE || code == EventCode::FLOOD) return true;
+    if (code == AlarmProfile::EventCode::TIMBRE || code == AlarmProfile::EventCode::BUTTON_PRESS) return true;
+    if (code == AlarmProfile::EventCode::SMOKE || code == AlarmProfile::EventCode::FLOOD) return true;
 
     // Solo si armado
     return (modoAlarma == "armado");
 }
 
 // --- MQTT publish helpers ---
-static void publishEvent(uint8_t srcId, EventCode code, uint8_t value) {
+static void publishEvent(uint8_t srcId, AlarmProfile::EventCode code, uint8_t value) {
     if (!mqttDisponible) return;
     char topic[48], payload[32];
     snprintf(topic, sizeof(topic), "casa/iot/device_%02X/evento", srcId);
@@ -66,9 +67,9 @@ static void publishEvent(uint8_t srcId, EventCode code, uint8_t value) {
     mqtt.publish(topic, payload);
 
     // Topics V3 para conservar la publicación consumida por HA.
-    if (value > 0 && code == EventCode::MOTION) {
+    if (value > 0 && code == AlarmProfile::EventCode::MOTION) {
         mqtt.publish(TOPIC_V3_EVENTO, "detectado");
-    } else if (value > 0 && code == EventCode::TIMBRE) {
+    } else if (value > 0 && code == AlarmProfile::EventCode::TIMBRE) {
         mqtt.publish(TOPIC_V3_TIMBRE, "presionado");
     }
 }
@@ -124,26 +125,26 @@ static void publishStateReport(uint8_t srcId, const IoTPacket &pkt) {
 
     uint8_t motionState = 0, buttonState = 0;
 
-    if (pkt.getTLV_uint8(TlvTag::STATE_MOTION, motionState)) {
+    if (pkt.getTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_MOTION), motionState)) {
         snprintf(topic, sizeof(topic), "casa/iot/device_%02X/state/motion", srcId);
         mqtt.publish(topic, motionState ? "active" : "idle", true);
     }
-    if (pkt.getTLV_uint8(TlvTag::STATE_BUTTON, buttonState)) {
+    if (pkt.getTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_BUTTON), buttonState)) {
         snprintf(topic, sizeof(topic), "casa/iot/device_%02X/state/button", srcId);
         mqtt.publish(topic, buttonState ? "pressed" : "released", true);
     }
 
     // Genéricos — si vienen otros estados, publicarlos
     uint8_t doorState = 0, relayState = 0, smokeState = 0;
-    if (pkt.getTLV_uint8(TlvTag::STATE_DOOR, doorState)) {
+    if (pkt.getTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_DOOR), doorState)) {
         snprintf(topic, sizeof(topic), "casa/iot/device_%02X/state/door", srcId);
         mqtt.publish(topic, doorState ? "open" : "closed", true);
     }
-    if (pkt.getTLV_uint8(TlvTag::STATE_RELAY, relayState)) {
+    if (pkt.getTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_RELAY), relayState)) {
         snprintf(topic, sizeof(topic), "casa/iot/device_%02X/state/relay", srcId);
         mqtt.publish(topic, relayState ? "on" : "off", true);
     }
-    if (pkt.getTLV_uint8(TlvTag::STATE_SMOKE, smokeState)) {
+    if (pkt.getTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_SMOKE), smokeState)) {
         snprintf(topic, sizeof(topic), "casa/iot/device_%02X/state/smoke", srcId);
         mqtt.publish(topic, smokeState ? "detected" : "clear", true);
     }
@@ -162,7 +163,7 @@ void handleIoTPacket(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePo
             pkt.getTLV_uint8(TlvTag::EVENT_TYPE, eventType);
             pkt.getTLV_uint8(TlvTag::EVENT_VALUE, eventValue);
 
-            EventCode code = static_cast<EventCode>(eventType);
+            AlarmProfile::EventCode code = static_cast<AlarmProfile::EventCode>(eventType);
             LOG_INFO("EVENT 0x%02X: %s val=%d (%s boot=0x%04X seq=%lu)",
                      pkt.src, eventCodeToStr(code), eventValue,
                      remoteIP.toString().c_str(), pkt.bootId,

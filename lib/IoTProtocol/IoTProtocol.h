@@ -54,12 +54,12 @@
 // ============================================================
 // Convención (no restricción en código):
 // 0x00 = reservado (no usar)
-// 0x01 = CENTRAL
-// 0x02–0x1F = sensores PIR/motion
-// 0x20–0x3F = botones/timbres/entrada
-// 0x40–0x5F = temperatura/humedad/ambiente
-// 0x60–0x7F = relés/actuadores
-// 0x80–0x9F = displays
+// 0x01 = nodo coordinador
+// 0x02–0x1F = nodos de entrada
+// 0x20–0x3F = nodos de interacción
+// 0x40–0x5F = nodos de telemetría
+// 0x60–0x7F = nodos de salida
+// 0x80–0x9F = nodos de visualización
 // 0xA0–0xFE = futuros
 // 0xFF = BROADCAST
 
@@ -72,11 +72,11 @@
 
 enum class MsgType : uint8_t {
     // Aplicación
-    EVENT       = 0x01,   // Sensor → Central: evento discreto (motion, timbre, puerta)
-    DATA        = 0x02,   // Sensor → Central: datos continuos (temperatura, humedad)
-    COMMAND     = 0x03,   // Central → Actuador: orden (relé ON, LED toggle)
-    RESPONSE    = 0x04,   // Actuador → Central: resultado de ejecución del comando
-    DISPLAY_MSG = 0x05,   // Central → Display: texto/datos para LCD
+    EVENT       = 0x01,   // Nodo → destino: evento discreto
+    DATA        = 0x02,   // Nodo → destino: datos continuos
+    COMMAND     = 0x03,   // Controlador → nodo de salida: orden
+    RESPONSE    = 0x04,   // Nodo de salida → controlador: resultado
+    DISPLAY_MSG = 0x05,   // Controlador → nodo de visualización: datos
 
     // Control
     ACK         = 0x10,   // Confirmación de recepción (protocolo, NO ejecución)
@@ -112,9 +112,9 @@ enum class MsgType : uint8_t {
 // ============================================================
 
 enum class Priority : uint8_t {
-    URGENT      = 0,   // Humo, flood, tamper — nunca descartable
-    NORMAL      = 1,   // Motion, puerta, timbre
-    BACKGROUND  = 2,   // Temperatura, heartbeat — descartable
+    URGENT      = 0,   // Mensaje crítico, no descartable por prioridad
+    NORMAL      = 1,   // Mensaje estándar
+    BACKGROUND  = 2,   // Telemetría, descartable si la cola está llena
 };
 
 // ============================================================
@@ -123,8 +123,8 @@ enum class Priority : uint8_t {
 
 enum class TlvTag : uint8_t {
     // === Eventos (0x01–0x0F) ===
-    EVENT_TYPE      = 0x01,   // uint8_t: EventCode
-    EVENT_VALUE     = 0x02,   // uint8_t: 1=activo, 0=inactivo
+    EVENT_TYPE      = 0x01,   // uint8_t: identificador de evento de aplicación
+    EVENT_VALUE     = 0x02,   // uint8_t: valor definido por la aplicación
 
     // === Datos de sensores (0x10–0x2F) ===
     TEMPERATURE     = 0x10,   // int16_t: temp × 10 (237 = 23.7°C)
@@ -153,7 +153,7 @@ enum class TlvTag : uint8_t {
 
     // === Discovery/Config (0x60–0x7F) ===
     DEVICE_NAME     = 0x60,   // string: nombre legible
-    DEVICE_TYPE_TAG = 0x61,   // uint8_t: DeviceType enum
+    DEVICE_TYPE_TAG = 0x61,   // uint8_t: identificador de tipo de aplicación
     CAPABILITY      = 0x62,   // uint8_t: capacidad (puede repetirse)
     FW_VERSION      = 0x63,   // string: "4.1.0"
     BOOT_ID_TAG     = 0x64,   // uint16_t: boot_id (para HELLO)
@@ -181,59 +181,14 @@ enum class TlvTag : uint8_t {
     RETRIES_COUNT   = 0x96,   // uint32_t: reintentos acumulados
     BOOT_REASON     = 0x97,   // uint8_t: BootReason enum
 
-    // === State (0xA0–0xAF) — estado actual de sensores/actuadores ===
-    STATE_MOTION    = 0xA0,   // uint8_t: 0=idle, 1=active
-    STATE_DOOR      = 0xA1,   // uint8_t: 0=closed, 1=open
-    STATE_RELAY     = 0xA2,   // uint8_t: 0=off, 1=on
-    STATE_BUTTON    = 0xA3,   // uint8_t: 0=released, 1=pressed
-    STATE_ALARM     = 0xA4,   // uint8_t: 0=disarmed, 1=armed, 2=triggered
-    STATE_SMOKE     = 0xA5,   // uint8_t: 0=clear, 1=detected
-    STATE_FLOOD     = 0xA6,   // uint8_t: 0=dry, 1=wet
+    // === State (0xA0–0xAF) ===
+    // Reservado para tags de estado definidos por cada aplicación.
+    // El core no asigna nombres ni semántica a este rango.
 
     // === Error (0xE0–0xEF) ===
     ERROR_CODE_TAG  = 0xE0,   // uint8_t: IoTError
     ERROR_SEQ       = 0xE1,   // uint32_t: SEQ del paquete que causó error
     ERROR_DETAIL    = 0xE2,   // string: detalle legible (debug)
-};
-
-// ============================================================
-// Códigos de eventos
-// ============================================================
-
-enum class EventCode : uint8_t {
-    MOTION          = 0x01,
-    DOOR_OPEN       = 0x02,
-    DOOR_CLOSE      = 0x03,
-    BUTTON_PRESS    = 0x04,
-    BUTTON_RELEASE  = 0x05,
-    TIMBRE          = 0x06,
-    SMOKE           = 0x07,
-    FLOOD           = 0x08,
-    TAMPER          = 0x09,
-    LOW_BATTERY     = 0x0A,
-    WINDOW_OPEN     = 0x0B,
-    WINDOW_CLOSE    = 0x0C,
-    VIBRATION       = 0x0D,
-    GAS_DETECTED    = 0x0E,
-};
-
-// ============================================================
-// Tipos de dispositivo
-// ============================================================
-
-enum class DeviceType : uint8_t {
-    CENTRAL         = 0x01,
-    PIR_SENSOR      = 0x02,
-    BUTTON          = 0x03,
-    TEMP_SENSOR     = 0x04,
-    RELAY           = 0x05,
-    DISPLAY_DEV     = 0x06,
-    DOOR_SENSOR     = 0x07,
-    SMOKE_SENSOR    = 0x08,
-    MULTI_SENSOR    = 0x09,
-    HUMIDITY_SENSOR = 0x0A,
-    FLOOD_SENSOR    = 0x0B,
-    GAS_SENSOR      = 0x0C,
 };
 
 // ============================================================

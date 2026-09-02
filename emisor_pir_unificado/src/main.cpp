@@ -15,6 +15,7 @@
 #include <IoTStorage.h>
 #include <IoTConfigHandler.h>
 #include <IoTAuth.h>
+#include <AlarmProfile.h>
 #include "secrets.h"
 #include "network_config.h"
 #include "device_config.h"
@@ -112,8 +113,10 @@ static void sendStateReport(IPAddress destIP, uint16_t destPort) {
     pkt.flags = 0;
     pkt.clearPayload();
 
-    pkt.addTLV_uint8(TlvTag::STATE_MOTION, pirAnterior ? 1 : 0);
-    pkt.addTLV_uint8(TlvTag::STATE_BUTTON, timbreAnterior == LOW ? 1 : 0);
+    pkt.addTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_MOTION),
+                     pirAnterior ? 1 : 0);
+    pkt.addTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_BUTTON),
+                     timbreAnterior == LOW ? 1 : 0);
     pkt.addTLV_uint32(TlvTag::UPTIME_SEC, millis() / 1000);
     pkt.addTLV_int8(TlvTag::RSSI_VAL, (int8_t)WiFi.RSSI());
     pkt.addTLV_uint32(TlvTag::FREE_HEAP, ESP.getFreeHeap());
@@ -231,7 +234,7 @@ void setup() {
     LOG_INFO("Auth: %s", storage.config().authEnabled ? "HABILITADO" : "deshabilitado");
 
     // HELLO (discovery)
-    node.sendHello(central_IP, UDP_PORT, MY_DEVICE_TYPE, MY_DEVICE_NAME);
+    node.sendHello(central_IP, UDP_PORT, AlarmProfile::toWire(MY_DEVICE_TYPE), MY_DEVICE_NAME);
 
     LOG_INFO("Setup completo — monitoreando sensores...");
 }
@@ -265,7 +268,8 @@ void loop() {
         if (ahora - ultimaDeteccionPIR > antirebotePIR) {
             ultimaDeteccionPIR = ahora;
             LOG_INFO("PIR detectado");
-            node.sendEvent(EventCode::MOTION, central_IP, UDP_PORT);
+            node.sendEvent(AlarmProfile::toWire(AlarmProfile::EventCode::MOTION),
+                           central_IP, UDP_PORT);
             LOG_INFO("MOTION encolado (q=%d)", node.queuedCount());
         }
     }
@@ -278,7 +282,8 @@ void loop() {
         if (ahora - ultimaDeteccionTimbre > antireboteTimbre) {
             ultimaDeteccionTimbre = ahora;
             LOG_INFO("Timbre presionado");
-            node.sendEvent(EventCode::TIMBRE, central_IP, UDP_PORT);
+            node.sendEvent(AlarmProfile::toWire(AlarmProfile::EventCode::TIMBRE),
+                           central_IP, UDP_PORT);
             LOG_INFO("TIMBRE encolado (q=%d)", node.queuedCount());
         }
     }

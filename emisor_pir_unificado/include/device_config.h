@@ -12,10 +12,11 @@
 #pragma once
 #include <ESP8266WiFi.h>
 #include <IoTProtocol.h>
+#include <AlarmProfile.h>
 
 // --- Identidad del dispositivo ---
 #define MY_DEVICE_ID    0x02                     // ID único en la red
-#define MY_DEVICE_TYPE  DeviceType::PIR_SENSOR   // Clase del dispositivo
+#define MY_DEVICE_TYPE  AlarmProfile::DeviceType::PIR_SENSOR   // Clase del dispositivo
 #define MY_DEVICE_NAME  "PIR Entrada"            // Nombre legible
 
 // --- OTA de mantenimiento ---

@@ -15,7 +15,7 @@
  * Uso:
  *   IoTNode node(MY_DEVICE_ID, UDP_PORT);
  *   node.begin();
- *   node.sendEvent(EventCode::MOTION, destIP, destPort);
+ *   node.sendEvent(eventCode, destIP, destPort);
  *   node.loop();  // cada iteración
  */
 
@@ -119,7 +119,7 @@ struct RemoteDevice {
     uint8_t   seqBitmap;        // Bit 0=seqHighest; bits siguientes=SEQ anteriores
 
     // Registry (se llena con HELLO)
-    DeviceType deviceType;
+    uint8_t   deviceType;
     char       name[20];
     char       fwVersion[12];
 
@@ -213,7 +213,7 @@ public:
      * Encolar un evento simple. ACK_REQUIRED + RELIABLE por defecto.
      * Funciona aunque no haya WiFi — se envía cuando conecte.
      */
-    bool sendEvent(EventCode event, IPAddress destIP, uint16_t destPort,
+    bool sendEvent(uint8_t eventCode, IPAddress destIP, uint16_t destPort,
                    uint8_t destId = IOT_DEVICE_CENTRAL);
 
     /**
@@ -233,7 +233,8 @@ public:
     void disableHeartbeat();
 
     // --- Discovery ---
-    void sendHello(IPAddress destIP, uint16_t destPort, DeviceType devType, const char* devName);
+    void sendHello(IPAddress destIP, uint16_t destPort, uint8_t deviceType,
+                   const char* devName);
 
     // --- Callback ---
     void onPacketReceived(IoTPacketHandler handler);
