@@ -579,7 +579,7 @@ bool IoTNode::_updateRemote(uint8_t srcId, IPAddress ip, uint16_t port,
 void IoTNode::_fillRemoteFromHello(RemoteDevice &dev, const IoTPacket &pkt) {
     uint8_t devType = 0;
     if (pkt.getTLV_uint8(TlvTag::DEVICE_TYPE_TAG, devType)) {
-        dev.deviceType = static_cast<DeviceType>(devType);
+        dev.deviceType = devType;
     }
     pkt.getTLV_string(TlvTag::DEVICE_NAME, dev.name, sizeof(dev.name));
     pkt.getTLV_string(TlvTag::FW_VERSION, dev.fwVersion, sizeof(dev.fwVersion));
@@ -679,7 +679,7 @@ void IoTNode::_sendHeartbeat() {
 // ============================================================
 
 void IoTNode::sendHello(IPAddress destIP, uint16_t destPort,
-                        DeviceType devType, const char* devName) {
+                        uint8_t deviceType, const char* devName) {
     IoTPacket pkt;
     pkt.version = IOT_PROTOCOL_VER;
     pkt.type = MsgType::HELLO;
@@ -689,7 +689,7 @@ void IoTNode::sendHello(IPAddress destIP, uint16_t destPort,
     pkt.seq = getNextSeq();
     pkt.flags = IOT_FLAG_ACK_REQUIRED | IOT_FLAG_RELIABLE;
     pkt.clearPayload();
-    pkt.addTLV_uint8(TlvTag::DEVICE_TYPE_TAG, static_cast<uint8_t>(devType));
+    pkt.addTLV_uint8(TlvTag::DEVICE_TYPE_TAG, deviceType);
     pkt.addTLV_string(TlvTag::DEVICE_NAME, devName);
     pkt.addTLV_string(TlvTag::FW_VERSION, "4.1.1");
     pkt.addTLV_uint16(TlvTag::BOOT_ID_TAG, _bootId);
@@ -749,7 +749,7 @@ bool IoTNode::_prepareOutgoing(IoTPacket &pkt) {
     return _authProvider.sign(pkt, _authProvider.context);
 }
 
-bool IoTNode::sendEvent(EventCode event, IPAddress destIP, uint16_t destPort, uint8_t destId) {
+bool IoTNode::sendEvent(uint8_t eventCode, IPAddress destIP, uint16_t destPort, uint8_t destId) {
     IoTPacket pkt;
     pkt.version = IOT_PROTOCOL_VER;
     pkt.type = MsgType::EVENT;
@@ -759,7 +759,7 @@ bool IoTNode::sendEvent(EventCode event, IPAddress destIP, uint16_t destPort, ui
     pkt.seq = getNextSeq();
     pkt.flags = IOT_FLAG_ACK_REQUIRED | IOT_FLAG_RELIABLE;
     pkt.clearPayload();
-    pkt.addTLV_uint8(TlvTag::EVENT_TYPE, static_cast<uint8_t>(event));
+    pkt.addTLV_uint8(TlvTag::EVENT_TYPE, eventCode);
     pkt.addTLV_uint8(TlvTag::EVENT_VALUE, 1);
     pkt.addTLV_int8(TlvTag::RSSI_VAL, (int8_t)WiFi.RSSI());
 
