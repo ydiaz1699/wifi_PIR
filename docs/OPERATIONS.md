@@ -170,3 +170,19 @@ hardware
 ```
 
 Una operación que no se ejecutó debe quedar como `PENDIENTE`, no como `VERIFICADA`.
+
+
+## 11. Gate de la central unificada
+
+Correcciones aplicadas en la revisión 2026-09-02:
+
+- orden del loop: WiFi → `IoTNode.loop()` → `buzzer.loop()` → STATE_REQUEST pendiente → MQTT;
+- `mqttDisponible` se limpia al perder WiFi y refleja `mqtt.loop()` junto con `mqtt.connected()`;
+- la recuperación HA→LOCAL hace un primer sondeo 60 s después de tres fallos y luego conserva el intervalo LOCAL de 5 min;
+- los comandos MQTT V3/V4 pasan por handlers centralizados, pero todavía no tienen `CMD_ID` ni deduplicación semántica;
+- STATE_REQUEST se conserva pendiente si no hay WiFi y se emite hasta tres veces después de una conexión, en t=0 s, t=3 s y t=10 s; una reconexión MQTT reinicia también esa ventana para recuperar estados perdidos durante la caída del broker; los plazos son rollover-safe frente a `millis()`;
+- `STATE_ALARM` y `STATE_FLOOD` tienen topics de estado explícitos;
+- EVENT sin `EVENT_TYPE`, códigos desconocidos y eventos sin política acústica no activan la bocina;
+- TAMPER queda explícitamente en modo publicación/log sin bocina hasta aprobar su política de seguridad.
+
+Esto no prueba todavía PubSubClient, MQTT/HA, STATE_SYNC en nodos reales ni hardware. La deduplicación de comandos MQTT y la política final de TAMPER siguen siendo decisiones de producto pendientes.

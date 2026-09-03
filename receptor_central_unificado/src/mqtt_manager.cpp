@@ -28,10 +28,32 @@ static unsigned long ultimoSondeo = 0;
 static uint8_t fallosConsecutivos = 0;
 static unsigned long inicioMQTT = 0;
 static bool primerIntentoPendiente = false;
+static bool solicitarStateSync = false;
 static const unsigned long MQTT_INITIAL_DELAY_MS = 1000;
 
 const char* modoMQTTStr() {
     return (modoMQTT == ModoMQTT::MODO_HA) ? "HA" : "LOCAL";
+}
+
+static void publicarModoAlarma() {
+    mqtt.publish(TOPIC_MODO_STATE, modoAlarma.c_str(), true);
+    mqtt.publish(TOPIC_V3_MODO_STATE, modoAlarma.c_str(), true);
+}
+
+static void procesarComandoBocina(const String& mensaje) {
+    if (mensaje == "ON") {
+        buzzer.timedOn(DURACION_BOCINA_MOTION_MS);
+    } else if (mensaje == "OFF") {
+        buzzer.off();
+        publicarEstadoBocina();
+    }
+}
+
+static void procesarComandoModo(const String& mensaje) {
+    if (mensaje != "armado" && mensaje != "desarmado") return;
+
+    modoAlarma = mensaje;
+    publicarModoAlarma();
 }
 
 static void mqttCallback(char* topic, byte* payload, unsigned int length) {
@@ -41,15 +63,12 @@ static void mqttCallback(char* topic, byte* payload, unsigned int length) {
     String t = String(topic);
     LOG_INFO("MQTT [%s]: %s", topic, mensaje.c_str());
 
+    // Los topics V3/V4 son aliases de compatibilidad. Ambos pasan por el
+    // mismo handler; aún no existe CMD_ID/deduplicación MQTT contractual.
     if (t == TOPIC_BOCINA_CMD || t == TOPIC_V3_BOCINA_CMD) {
-        if (mensaje == "ON") buzzer.timedOn(DURACION_BOCINA_MOTION_MS);
-        else if (mensaje == "OFF") { buzzer.off(); publicarEstadoBocina(); }
+        procesarComandoBocina(mensaje);
     } else if (t == TOPIC_MODO || t == TOPIC_V3_MODO) {
-        if (mensaje == "armado" || mensaje == "desarmado") {
-            modoAlarma = mensaje;
-            mqtt.publish(TOPIC_MODO_STATE, modoAlarma.c_str(), true);
-            mqtt.publish(TOPIC_V3_MODO_STATE, modoAlarma.c_str(), true);
-        }
+        procesarComandoModo(mensaje);
     }
 }
 
@@ -67,6 +86,7 @@ static bool intentarConexionMQTT() {
     if (ok) {
         LOG_INFO("MQTT conectado OK");
         mqttDisponible = true;
+        solicitarStateSync = true;
         fallosConsecutivos = 0;
 
         // El topic V3 es el LWT/availability que consume Discovery.
@@ -158,6 +178,11 @@ void manejarMQTT() {
 
     // --- MODO HA ---
     if (!mqtt.connected()) {
+        if (mqttDisponible) {
+            // Sellar el instante de la caída una sola vez. Así el primer
+            // reintento ocurre 15s después de detectarla, no inmediatamente.
+            ultimoIntentoMQTT = millis();
+        }
         mqttDisponible = false;
         const unsigned long reconnectAhora = millis();
         if (reconnectAhora - ultimoIntentoMQTT > MQTT_RECONNECT_INTERVAL_MS) {
@@ -167,7 +192,10 @@ void manejarMQTT() {
                 if (fallosConsecutivos >= 3) {
                     LOG_WARN("Broker caido, volviendo a LOCAL");
                     modoMQTT = ModoMQTT::MODO_LOCAL;
-                    ultimoSondeo = millis();
+                    // Primer sondeo acelerado tras una caída; los siguientes
+                    // respetan MQTT_SONDEO_INTERVAL_MS (5 minutos).
+                    ultimoSondeo = millis() - MQTT_SONDEO_INTERVAL_MS +
+                                   MQTT_SONDEO_DESPUES_DE_CAIDA_MS;
                     fallosConsecutivos = 0;
                 }
             }
@@ -175,8 +203,9 @@ void manejarMQTT() {
         return;
     }
 
-    mqtt.loop();
-    mqttDisponible = true;
+    const bool loopOk = mqtt.loop();
+    mqttDisponible = loopOk && mqtt.connected();
+    if (!mqttDisponible) return;
 
     const unsigned long uptimeAhora = millis();
     if (uptimeAhora - ultimoUptime > 60000) {
@@ -185,6 +214,12 @@ void manejarMQTT() {
         mqtt.publish(TOPIC_UPTIME, uptime.c_str(), true);
         mqtt.publish(TOPIC_V3_UPTIME, uptime.c_str(), true);
     }
+}
+
+bool consumirSolicitudStateSync() {
+    const bool pendiente = solicitarStateSync;
+    solicitarStateSync = false;
+    return pendiente;
 }
 
 void publicarEstadoBocina() {

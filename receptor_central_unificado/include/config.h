@@ -51,4 +51,5 @@ extern const unsigned long DURACION_BOCINA_TIMBRE_MS;
 extern const unsigned long DURACION_BOCINA_PUERTA_MS;
 extern const unsigned long MQTT_RECONNECT_INTERVAL_MS;
 extern const unsigned long MQTT_SONDEO_INTERVAL_MS;
+extern const unsigned long MQTT_SONDEO_DESPUES_DE_CAIDA_MS;
 extern const unsigned long HEARTBEAT_TIMEOUT_MS;

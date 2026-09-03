@@ -66,6 +66,23 @@ String modoAlarma = "armado";
 static bool wifiConectando = false;
 static unsigned long ultimoIntentoWiFi = 0;
 
+// STATE_REQUEST es best-effort, pero no se pierde si la central arranca sin WiFi.
+// Se repite al conectar en t=0s, t=3s y t=10s; no garantiza respuesta de cada nodo.
+static bool stateRequestPending = true;
+static uint8_t stateRequestAttempts = 0;
+static unsigned long nextStateRequestAt = 0;
+static bool stateRequestWifiWasConnected = false;
+static const uint8_t STATE_REQUEST_MAX_ATTEMPTS = 3;
+
+static unsigned long stateRequestDelay(uint8_t attempt) {
+    switch (attempt) {
+        case 0: return 0;
+        case 1: return 3000;
+        // El segundo reintento ocurre 7s después del de t=3s: t=10s total.
+        default: return 7000;
+    }
+}
+
 static void iniciarWiFi() {
     WiFi.mode(WIFI_STA);
     WiFi.config(local_IP, gateway_IP, subnet_mask);
@@ -166,24 +183,48 @@ void setup() {
 
     setupOTA();
 
+    // STATE_SYNC queda pendiente hasta que exista WiFi; el loop lo emitirá
+    // después de que IoTNode haya tenido su primera oportunidad de procesar UDP.
+    stateRequestPending = true;
+    stateRequestAttempts = 0;
+    nextStateRequestAt = millis();
+    stateRequestWifiWasConnected = false;
+
     LOG_INFO("Modo MQTT: %s | Alarma: %s", modoMQTTStr(), modoAlarma.c_str());
     LOG_INFO("Setup completo — esperando eventos...");
+}
 
-    // STATE_SYNC: pedir estado actual a todos los nodos
-    {
-        IoTPacket req;
-        req.version = IOT_PROTOCOL_VER;
-        req.type = MsgType::STATE_REQUEST;
-        req.src = MY_DEVICE_ID;
-        req.dst = IOT_DEVICE_BROADCAST;
-        req.bootId = node.getBootId();
-        req.seq = node.getNextSeq();
-        req.flags = 0;
-        req.clearPayload();
-        // Usar WiFi.broadcastIP() en vez de IP hardcodeada (respeta subnet)
-        node.sendDirect(req, WiFi.broadcastIP(), IOT_UDP_PORT);
-        LOG_INFO("STATE_REQUEST broadcast enviado (%s)", WiFi.broadcastIP().toString().c_str());
+// --- STATE_SYNC ---
+static void enviarStateRequestSiCorresponde() {
+    if (!stateRequestPending || WiFi.status() != WL_CONNECTED) return;
+
+    const unsigned long ahora = millis();
+    // Comparación modular segura frente al rollover de millis() (~49 días).
+    if (static_cast<long>(ahora - nextStateRequestAt) < 0) return;
+
+    IoTPacket req{};
+    req.version = IOT_PROTOCOL_VER;
+    req.type = MsgType::STATE_REQUEST;
+    req.src = MY_DEVICE_ID;
+    req.dst = IOT_DEVICE_BROADCAST;
+    req.bootId = node.getBootId();
+    req.seq = node.getNextSeq();
+    req.flags = 0;
+    req.clearPayload();
+
+    const IPAddress broadcast = WiFi.broadcastIP();
+    node.sendDirect(req, broadcast, IOT_UDP_PORT);
+    LOG_INFO("STATE_REQUEST broadcast emitido (%s), intento %u/%u",
+             broadcast.toString().c_str(),
+             static_cast<unsigned>(stateRequestAttempts + 1),
+             static_cast<unsigned>(STATE_REQUEST_MAX_ATTEMPTS));
+
+    stateRequestAttempts++;
+    if (stateRequestAttempts >= STATE_REQUEST_MAX_ATTEMPTS) {
+        stateRequestPending = false;
+        return;
     }
+    nextStateRequestAt = ahora + stateRequestDelay(stateRequestAttempts);
 }
 
 // ============================================================
@@ -194,14 +235,38 @@ void loop() {
     ESP.wdtFeed();
 
     manejarWiFi();
-    buzzer.loop();
+
+    const bool wifiConectado = WiFi.status() == WL_CONNECTED;
+    if (!wifiConectado) {
+        // No entrar a manejarMQTT() con un estado de disponibilidad obsoleto.
+        mqttDisponible = false;
+        stateRequestWifiWasConnected = false;
+    } else if (!stateRequestWifiWasConnected) {
+        // Cada recuperación de WiFi inicia una nueva ventana best-effort de sync.
+        stateRequestWifiWasConnected = true;
+        stateRequestPending = true;
+        stateRequestAttempts = 0;
+        nextStateRequestAt = millis();
+    }
 
     // PRIORIDAD #1: IoTProtocol (nunca bloquea)
     node.loop();
 
-    // PRIORIDAD #2: MQTT
-    if (WiFi.status() == WL_CONNECTED) {
-        manejarMQTT();
+    // El timer se ejecuta después de recibir/despachar eventos. Así un evento
+    // que llega al vencimiento del plazo puede renovar la alarma en esta vuelta.
+    buzzer.loop();
+
+    enviarStateRequestSiCorresponde();
+
+    // PRIORIDAD #2: MQTT; también se llama sin WiFi para limpiar disponibilidad.
+    manejarMQTT();
+
+    // Si el broker volvió mientras WiFi permanecía conectado, pedir de nuevo
+    // los estados que pudieron recibirse durante la caída de MQTT.
+    if (consumirSolicitudStateSync()) {
+        stateRequestPending = true;
+        stateRequestAttempts = 0;
+        nextStateRequestAt = millis();
     }
 
     // Publicar cambios de bocina

@@ -3,7 +3,7 @@
 Este directorio es la candidata unificada V3+V4 de la central, construida sobre la base actual de `receptor_central_unificado/`.
 
 - Conserva el núcleo común de `lib/IoTProtocol` y el comportamiento V3 compatible de MQTT, Home Assistant, alarma y bocina.
-- `receptor_bocina/` permanece sin modificaciones como respaldo congelado de V3.
+- `legacy/receptor_bocina/` permanece sin modificaciones como respaldo congelado de V3.
 - Esta candidata no debe promocionarse ni sustituir a V3 hasta pasar el gate documentado en [`docs/MATRIZ_UNIFICACION_V3_V4.md`](../docs/MATRIZ_UNIFICACION_V3_V4.md).
 - Los secretos y artefactos de compilación no forman parte de esta candidata; usa `secrets.h` y `network_config.h` locales/configurados fuera del control de versiones al compilar.
 

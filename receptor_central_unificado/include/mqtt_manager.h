@@ -10,5 +10,8 @@ extern ModoMQTT modoMQTT;
 
 void inicializarMQTT();
 void manejarMQTT();
+// True una sola vez después de cada conexión MQTT exitosa, para que la
+// central vuelva a solicitar estados que pudieron llegar durante una caída.
+bool consumirSolicitudStateSync();
 void publicarEstadoBocina();
 const char* modoMQTTStr();

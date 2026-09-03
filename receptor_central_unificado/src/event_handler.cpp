@@ -26,12 +26,40 @@ static const char* eventCodeToStr(AlarmProfile::EventCode code) {
         case AlarmProfile::EventCode::DOOR_OPEN:    return "DOOR_OPEN";
         case AlarmProfile::EventCode::DOOR_CLOSE:   return "DOOR_CLOSE";
         case AlarmProfile::EventCode::BUTTON_PRESS: return "BUTTON_PRESS";
+        case AlarmProfile::EventCode::BUTTON_RELEASE:return "BUTTON_RELEASE";
         case AlarmProfile::EventCode::TIMBRE:       return "TIMBRE";
         case AlarmProfile::EventCode::SMOKE:        return "SMOKE";
         case AlarmProfile::EventCode::FLOOD:        return "FLOOD";
         case AlarmProfile::EventCode::TAMPER:       return "TAMPER";
         case AlarmProfile::EventCode::LOW_BATTERY: return "LOW_BATTERY";
+        case AlarmProfile::EventCode::WINDOW_OPEN: return "WINDOW_OPEN";
+        case AlarmProfile::EventCode::WINDOW_CLOSE:return "WINDOW_CLOSE";
+        case AlarmProfile::EventCode::VIBRATION:   return "VIBRATION";
+        case AlarmProfile::EventCode::GAS_DETECTED:return "GAS_DETECTED";
         default:                      return "UNKNOWN";
+    }
+}
+
+// --- Validación del vocabulario del perfil ---
+static bool esEventCodeConocido(uint8_t rawCode) {
+    switch (static_cast<AlarmProfile::EventCode>(rawCode)) {
+        case AlarmProfile::EventCode::MOTION:
+        case AlarmProfile::EventCode::DOOR_OPEN:
+        case AlarmProfile::EventCode::DOOR_CLOSE:
+        case AlarmProfile::EventCode::BUTTON_PRESS:
+        case AlarmProfile::EventCode::BUTTON_RELEASE:
+        case AlarmProfile::EventCode::TIMBRE:
+        case AlarmProfile::EventCode::SMOKE:
+        case AlarmProfile::EventCode::FLOOD:
+        case AlarmProfile::EventCode::TAMPER:
+        case AlarmProfile::EventCode::LOW_BATTERY:
+        case AlarmProfile::EventCode::WINDOW_OPEN:
+        case AlarmProfile::EventCode::WINDOW_CLOSE:
+        case AlarmProfile::EventCode::VIBRATION:
+        case AlarmProfile::EventCode::GAS_DETECTED:
+            return true;
+        default:
+            return false;
     }
 }
 
@@ -44,18 +72,48 @@ static unsigned long duracionPorEvento(AlarmProfile::EventCode code) {
         case AlarmProfile::EventCode::DOOR_OPEN:    return DURACION_BOCINA_PUERTA_MS;
         case AlarmProfile::EventCode::SMOKE:        return 5000;
         case AlarmProfile::EventCode::FLOOD:        return 3000;
-        default:                      return DURACION_BOCINA_TIMBRE_MS;
+        // TAMPER queda explícitamente sin bocina hasta aprobar su contrato
+        // de seguridad (modo, prioridad y duración). Se sigue publicando.
+        case AlarmProfile::EventCode::TAMPER:       return 0;
+        case AlarmProfile::EventCode::DOOR_CLOSE:
+        case AlarmProfile::EventCode::BUTTON_RELEASE:
+        case AlarmProfile::EventCode::LOW_BATTERY:
+        case AlarmProfile::EventCode::WINDOW_OPEN:
+        case AlarmProfile::EventCode::WINDOW_CLOSE:
+        case AlarmProfile::EventCode::VIBRATION:
+        case AlarmProfile::EventCode::GAS_DETECTED:
+        default:                                    return 0;
     }
 }
 
-// --- ¿Activar bocina? Depende del modo ---
+// --- ¿Activar bocina? Es una allowlist deliberada, no un fallback por modo. ---
 static bool debeActivarBocina(AlarmProfile::EventCode code) {
-    // Siempre suenan (no dependen del modo)
-    if (code == AlarmProfile::EventCode::TIMBRE || code == AlarmProfile::EventCode::BUTTON_PRESS) return true;
-    if (code == AlarmProfile::EventCode::SMOKE || code == AlarmProfile::EventCode::FLOOD) return true;
+    switch (code) {
+        // Conserva la política V3/V4 actual: estos eventos suenan siempre.
+        case AlarmProfile::EventCode::TIMBRE:
+        case AlarmProfile::EventCode::BUTTON_PRESS:
+        case AlarmProfile::EventCode::SMOKE:
+        case AlarmProfile::EventCode::FLOOD:
+            return true;
 
-    // Solo si armado
-    return (modoAlarma == "armado");
+        // MOTION y apertura solo activan con la alarma armada.
+        case AlarmProfile::EventCode::MOTION:
+        case AlarmProfile::EventCode::DOOR_OPEN:
+            return modoAlarma == "armado";
+
+        // Eventos de estado/diagnóstico y códigos aún sin contrato acústico
+        // se publican, pero no activan la bocina accidentalmente.
+        case AlarmProfile::EventCode::DOOR_CLOSE:
+        case AlarmProfile::EventCode::BUTTON_RELEASE:
+        case AlarmProfile::EventCode::TAMPER:
+        case AlarmProfile::EventCode::LOW_BATTERY:
+        case AlarmProfile::EventCode::WINDOW_OPEN:
+        case AlarmProfile::EventCode::WINDOW_CLOSE:
+        case AlarmProfile::EventCode::VIBRATION:
+        case AlarmProfile::EventCode::GAS_DETECTED:
+        default:
+            return false;
+    }
 }
 
 // --- MQTT publish helpers ---
@@ -121,7 +179,7 @@ static void publishHeartbeat(uint8_t srcId, const IoTPacket &pkt) {
 
 static void publishStateReport(uint8_t srcId, const IoTPacket &pkt) {
     if (!mqttDisponible) return;
-    char topic[48], payload[8];
+    char topic[48];
 
     uint8_t motionState = 0, buttonState = 0;
 
@@ -134,8 +192,11 @@ static void publishStateReport(uint8_t srcId, const IoTPacket &pkt) {
         mqtt.publish(topic, buttonState ? "pressed" : "released", true);
     }
 
-    // Genéricos — si vienen otros estados, publicarlos
+    // Todos los StateTag actualmente definidos por AlarmProfile tienen una
+    // traducción MQTT explícita. No existe aún un StateTag de batería: LOW_BATTERY
+    // es EventCode y requiere un contrato separado si se necesita estado retained.
     uint8_t doorState = 0, relayState = 0, smokeState = 0;
+    uint8_t alarmState = 0, floodState = 0;
     if (pkt.getTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_DOOR), doorState)) {
         snprintf(topic, sizeof(topic), "casa/iot/device_%02X/state/door", srcId);
         mqtt.publish(topic, doorState ? "open" : "closed", true);
@@ -148,6 +209,14 @@ static void publishStateReport(uint8_t srcId, const IoTPacket &pkt) {
         snprintf(topic, sizeof(topic), "casa/iot/device_%02X/state/smoke", srcId);
         mqtt.publish(topic, smokeState ? "detected" : "clear", true);
     }
+    if (pkt.getTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_ALARM), alarmState)) {
+        snprintf(topic, sizeof(topic), "casa/iot/device_%02X/state/alarm", srcId);
+        mqtt.publish(topic, alarmState ? "active" : "clear", true);
+    }
+    if (pkt.getTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_FLOOD), floodState)) {
+        snprintf(topic, sizeof(topic), "casa/iot/device_%02X/state/flood", srcId);
+        mqtt.publish(topic, floodState ? "detected" : "clear", true);
+    }
 }
 
 // ============================================================
@@ -159,20 +228,32 @@ void handleIoTPacket(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePo
     // este handler. Aquí solo se procesan paquetes aceptados por la frontera.
     switch (pkt.type) {
         case MsgType::EVENT: {
-            uint8_t eventType = 0, eventValue = 1;
-            pkt.getTLV_uint8(TlvTag::EVENT_TYPE, eventType);
+            uint8_t eventType = 0;
+            uint8_t eventValue = 1;
+            const bool hasEventType = pkt.getTLV_uint8(TlvTag::EVENT_TYPE, eventType);
             pkt.getTLV_uint8(TlvTag::EVENT_VALUE, eventValue);
 
+            if (!hasEventType) {
+                LOG_WARN("EVENT 0x%02X descartado: falta EVENT_TYPE", pkt.src);
+                break;
+            }
+
             AlarmProfile::EventCode code = static_cast<AlarmProfile::EventCode>(eventType);
-            LOG_INFO("EVENT 0x%02X: %s val=%d (%s boot=0x%04X seq=%lu)",
+            const bool knownEvent = esEventCodeConocido(eventType);
+            LOG_INFO("EVENT 0x%02X: %s val=%d (%s boot=0x%04X seq=%lu)%s",
                      pkt.src, eventCodeToStr(code), eventValue,
                      remoteIP.toString().c_str(), pkt.bootId,
-                     (unsigned long)pkt.seq);
+                     (unsigned long)pkt.seq,
+                     knownEvent ? "" : " [desconocido]");
 
+            // Se conserva la telemetría del evento, pero un código futuro o
+            // corrupto nunca puede activar la bocina por una regla por defecto.
             publishEvent(pkt.src, code, eventValue);
+            if (!knownEvent) break;
 
             if (eventValue > 0 && debeActivarBocina(code)) {
                 unsigned long dur = duracionPorEvento(code);
+                if (dur == 0) break;
                 buzzer.timedOn(dur);
                 LOG_INFO("Bocina ON %lums (%s)", dur, eventCodeToStr(code));
             }
@@ -201,7 +282,7 @@ void handleIoTPacket(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePo
 
             // Publicar discovery en MQTT
             if (mqttDisponible) {
-                char topic[48], payload[40];
+                char topic[48];
                 snprintf(topic, sizeof(topic), "casa/iot/device_%02X/name", pkt.src);
                 mqtt.publish(topic, name, true);
                 snprintf(topic, sizeof(topic), "casa/iot/device_%02X/status", pkt.src);
