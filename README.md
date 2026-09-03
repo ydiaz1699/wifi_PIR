@@ -35,12 +35,12 @@ Sistema modular de alarma y sensores IoT usando ESP8266 con protocolo propio sob
 | [**ARCHITECTURE.md**](docs/ARCHITECTURE.md) | Cómo funciona todo el sistema (emisor, receptor, protocolo, modos) |
 | [**ANALISIS_INICIAL_HALLAZGOS.md**](docs/ANALISIS_INICIAL_HALLAZGOS.md) | Snapshot auditable del análisis, hallazgos y método para comparar ideas futuras |
 | [**universal-protocol/**](docs/universal-protocol/) | Meta-prompt, unificación y auditoría de los drafts para diseñar el protocolo universal |
-| [**INFORME_DRAFTS_RESTANTES.md**](docs/universal-protocol/INFORME_DRAFTS_RESTANTES.md) | Trazabilidad de los cinco drafts restantes, bugs históricos y backlog futuro |
+| [**DRAFTS_AUDIT.md**](docs/DRAFTS_AUDIT.md) | Trazabilidad canónica de los diez drafts históricos retirados, estados y pendientes |
 | [**CAPABILITY_DISCOVERY.md**](docs/universal-protocol/CAPABILITY_DISCOVERY.md) | Especificación futura implementable del sistema de capacidades |
 | [**CHANGELOG.md**](docs/CHANGELOG.md) | Historial completo de versiones (V3.1 → V4.3) |
 | [**BUGS_FIXED.md**](docs/BUGS_FIXED.md) | Bugs históricos con estados de evidencia, causas y reglas preventivas |
 | [**PLAN_EJECUCION_FUTURA.md**](docs/PLAN_EJECUCION_FUTURA.md) | Estado técnico y orden seguro para continuar el desarrollo |
-| [**ROADMAP.md**](docs/ROADMAP.md) | Mejoras futuras con instrucciones concretas paso a paso |
+| [**OPERATIONS.md**](docs/OPERATIONS.md) | Compile check host, tests, patch, MQTT/HA, OTA y validación de red |
 
 ## Quick Start
 
@@ -53,17 +53,17 @@ cp secrets.h.template secrets.h
 # Editar secrets.h con tus credenciales WiFi/MQTT/AUTH_KEY
 ```
 
-### 2. Flashear emisor (V3.5.1 producción)
+### 2. Flashear emisor V3.5.1 conservado
 
 ```bash
-cd emisor_pir
+cd legacy/emisor_pir
 pio run -t upload
 ```
 
-### 3. Flashear receptor (V3.5.1 producción)
+### 3. Flashear receptor V3.5.1 conservado
 
 ```bash
-cd receptor_bocina
+cd legacy/receptor_bocina
 pio run -t upload
 ```
 
@@ -87,6 +87,8 @@ wifi_PIR/
 ├── docs/                     ← DOCUMENTACIÓN
 │   ├── ARCHITECTURE.md
 │   ├── ANALISIS_INICIAL_HALLAZGOS.md
+│   ├── DRAFTS_AUDIT.md
+│   ├── OPERATIONS.md
 │   ├── universal-protocol/
 │   │   ├── META_PROMPT.md
 │   │   ├── INFORME_UNIFICACION.md
@@ -100,12 +102,11 @@ wifi_PIR/
 ├── secrets.h.template        ← Copiar a secrets.h (WiFi + MQTT + AUTH_KEY)
 ├── network_config.h          ← Gateway, subnet, puerto UDP
 │
-├── emisor_pir/               ← EMISOR V3.5.1 (PRODUCCIÓN)
-├── receptor_bocina/          ← RECEPTOR V3.5.1 (PRODUCCIÓN)
-│
-├── lib/IoTProtocol/          ← BIBLIOTECA V4.3 (DESARROLLO)
-├── emisor_pir_v4/            ← EMISOR V4.3
-└── receptor_central_v4/      ← RECEPTOR V4.3
+├── legacy/                   ← RESPALDO V3.5.1
+│   ├── emisor_pir/
+│   └── receptor_bocina/
+├── emisor_pir_unificado/    ← V4 unificada en desarrollo
+└── receptor_central_unificado/ ← Central V4 unificada en desarrollo
 ```
 
 ## Hardware
@@ -134,5 +135,5 @@ New-NetFirewallRule -DisplayName "PlatformIO OTA TCP" -Direction Inbound -Protoc
 
 Luego:
 ```bash
-pio run -d receptor_bocina -e receptor_bocina_ota -t upload
+pio run -d legacy/receptor_bocina -e receptor_bocina_ota -t upload
 ```

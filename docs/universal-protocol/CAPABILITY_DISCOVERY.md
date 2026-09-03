@@ -3,16 +3,16 @@
 ## Estado
 
 - **Estado:** PROPUESTA IMPLEMENTABLE; no está implementada en el código V4 actual.
-- **Origen:** `_drafts/ideas.md`, sección “Un sistema de capacidades”.
-- **Auditoría relacionada:** [`INFORME_DRAFTS_RESTANTES.md`](INFORME_DRAFTS_RESTANTES.md).
-- **Código relacionado:** `lib/IoTProtocol/IoTProtocol.h`, `lib/IoTProtocol/IoTNode.h`, `lib/IoTProtocol/IoTNode.cpp`, `receptor_central_v4/src/event_handler.cpp` y `receptor_central_v4/src/main.cpp`.
+- **Origen histórico:** la idea fue consolidada desde el backlog de drafts; no depende de que el archivo fuente siga presente.
+- **Auditoría relacionada:** [`INFORME_DRAFTS_RESTANTES.md`](INFORME_DRAFTS_RESTANTES.md) y [`../DRAFTS_AUDIT.md`](../DRAFTS_AUDIT.md).
+- **Código relacionado:** `lib/IoTProtocol/IoTProtocol.h`, `lib/IoTProtocol/IoTNode.h`, `lib/IoTProtocol/IoTNode.cpp`, `receptor_central_unificado/src/event_handler.cpp` y `receptor_central_unificado/src/main.cpp`.
 - **Objetivo:** conservar suficiente detalle para que una sesión futura pueda implementar esta capacidad sin depender del draft original ni de la memoria de una conversación.
 
 Este documento describe el contrato propuesto, las decisiones de compatibilidad, los cambios probables y las pruebas necesarias. **No afirma que la capacidad exista actualmente.**
 
 ## 1. Idea original conservada
 
-La idea de `_drafts/ideas.md` es que cada dispositivo anuncie qué funciones soporta cuando se conecta:
+La idea de `docs/DRAFTS_AUDIT.md` es que cada dispositivo anuncie qué funciones soporta cuando se conecta:
 
 ```text
 DEVICE_ID: 0x12
@@ -393,8 +393,8 @@ Cambios:
 Archivos candidatos:
 
 ```text
-emisor_pir_v4/src/main.cpp
-receptor_central_v4/src/main.cpp
+emisor_pir_unificado/src/main.cpp
+receptor_central_unificado/src/main.cpp
 ```
 
 Ejemplos de configuración:
@@ -413,8 +413,8 @@ Un emisor de puerta debería anunciar `DOOR` y `BATTERY`, no copiar la lista de 
 Archivos candidatos:
 
 ```text
-receptor_central_v4/src/event_handler.cpp
-receptor_central_v4/src/main.cpp
+receptor_central_unificado/src/event_handler.cpp
+receptor_central_unificado/src/main.cpp
 receptor_bocina/src/mqtt_discovery.cpp
 ```
 
@@ -495,13 +495,13 @@ Hasta cerrar estas decisiones, el documento permanece en estado **PROPUESTA IMPL
 
 | Elemento | Fuente | Estado | Destino |
 |---|---|---|---|
-| Device 0x12 con MOTION/TEMPERATURE/BATTERY | `_drafts/ideas.md` | Conservado y formalizado | Secciones 1, 4 y 8 |
-| Device 0x13 con DOOR/BATTERY | `_drafts/ideas.md` | Conservado y formalizado | Secciones 1, 4 y 8 |
-| Añadir sensores sin protocolos paralelos | `_drafts/ideas.md` | Objetivo arquitectónico | Secciones 2, 7 y 9 |
+| Device 0x12 con MOTION/TEMPERATURE/BATTERY | `docs/DRAFTS_AUDIT.md` | Conservado y formalizado | Secciones 1, 4 y 8 |
+| Device 0x13 con DOOR/BATTERY | `docs/DRAFTS_AUDIT.md` | Conservado y formalizado | Secciones 1, 4 y 8 |
+| Añadir sensores sin protocolos paralelos | `docs/DRAFTS_AUDIT.md` | Objetivo arquitectónico | Secciones 2, 7 y 9 |
 | `CAPABILITY=0x62` | `IoTProtocol.h` actual | Declarado, no implementado | Secciones 3 y 4 |
 | HELLO/registry existente | Código V4 | Parcialmente implementado | Secciones 3 y 7 |
-| MQTT/HA dinámico | `ideas.md` + roadmap | Futuro adapter | Sección 5 |
-| Auth antes de efectos internos | Hallazgos H-002/BUG-010 | Pendiente | Secciones 4.5 y 7.5 |
+| MQTT/HA dinámico | `docs/DRAFTS_AUDIT.md` + roadmap | Futuro adapter | Sección 5 |
+| Auth antes de efectos internos | Hallazgos H-002/BUG-010 y código actual | Integrado en la frontera de `IoTNode`; pruebas pendientes | Secciones 4.5 y 7.5 |
 
 ## Resultado
 

@@ -4,10 +4,10 @@
 
 - Estado: auditoría de unificación completada; resultado pendiente de revisión humana.
 - Fecha: 2026-08-31.
-- Fuentes: cuatro borradores del commit `3390de3ef886e4057d4975cc775311f3a25c4c82`.
+- **Fuentes históricas:** cuatro borradores que fueron consolidados y retirados; su trazabilidad vigente está en [`../DRAFTS_AUDIT.md`](../DRAFTS_AUDIT.md).
 - Resultado principal: `docs/universal-protocol/META_PROMPT.md`.
 - Código funcional modificado: ninguno.
-- Auditoría complementaria: los cinco drafts restantes se analizaron por separado en [`INFORME_DRAFTS_RESTANTES.md`](INFORME_DRAFTS_RESTANTES.md); no forman parte de las cuatro fuentes de esta matriz.
+- **Auditoría complementaria:** el detalle de los diez drafts históricos, incluidos estos cuatro, está en [`../DRAFTS_AUDIT.md`](../DRAFTS_AUDIT.md).
 
 ## 1. Alcance de la auditoría
 
@@ -227,20 +227,22 @@ Se conservaron sin elegir todavía:
 | Incluir secretos o credenciales reales | RECHAZADO | Seguridad y reproducibilidad |
 | Mantener cuatro prompts paralelos como instrucciones simultáneas | RECHAZADO | Produce contradicciones y deriva de decisiones |
 
+> **Actualización 2026-09-02:** las fuentes históricas fueron consolidadas en `docs/DRAFTS_AUDIT.md` y retiradas. El código actual conecta BOOT_ID persistente y autenticación temprana en `IoTNode`; siguen pendientes compilación de firmware, integración, MQTT/HA, OTA y hardware. El check host posterior está documentado en `docs/OPERATIONS.md`.
+
 ## 8. Fuera de alcance de esta unificación
 
 No se hizo lo siguiente:
 
-- modificar `lib/IoTProtocol`;
-- aplicar el patch `_drafts/v4.3.1-security.patch`;
-- decidir el wire format final;
+- modificar `lib/IoTProtocol` como parte de esta auditoría;
+- aplicar el patch histórico ausente;
+- decidir el wire format final V5;
 - cambiar HMAC de 4 a 8 bytes;
-- integrar `BOOT_ID` persistente;
 - crear `ITransport` real;
 - implementar V5;
-- compilar o probar firmware;
-- eliminar los cuatro borradores originales;
+- compilar o probar el firmware unificado en hardware;
 - publicar cambios en GitHub.
+
+La trazabilidad de la retirada de los cuatro drafts de diseño está en `docs/DRAFTS_AUDIT.md`.
 
 ## 9. Decisiones pendientes que requieren revisión humana
 

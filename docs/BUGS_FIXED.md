@@ -1,8 +1,14 @@
 # Registro canónico de bugs y correcciones
 
+> **Actualización canónica 2026-09-02:** los diez drafts históricos ya no son fuente operativa; su trazabilidad está en [`DRAFTS_AUDIT.md`](DRAFTS_AUDIT.md). El estado siguiente separa código conectado de compilación, integración y hardware.
+>
+> **BUG-008:** el código actual conecta el BOOT_ID de almacenamiento de los firmwares unificados con `IoTNode::begin(bootId)`; quedan pendientes las pruebas de reinicio, LittleFS y fallback.
+>
+> **BUG-010:** `IoTNode` verifica autenticación antes de los efectos internos relevantes; quedan pendientes las pruebas de integración, política de ACK inválido y hardware. No declarar “verificado” solo por la implementación.
+
 ## Propósito y regla de evidencia
 
-Este documento conserva síntomas, causas, soluciones históricas y reglas preventivas sin confundir una propuesta con una corrección verificada. El archivo histórico `_drafts/BUGS_FIXED.md` se mantiene como fuente de procedencia; este registro es la referencia actual para el estado.
+La documentación canónica ya no depende de una copia viva del draft; su contenido histórico y su destino están en [`DRAFTS_AUDIT.md`](DRAFTS_AUDIT.md). Este registro es la referencia actual para el estado.
 
 La documentación no reemplaza al código ni a las pruebas. Los estados permitidos son:
 
@@ -118,9 +124,9 @@ También pueden usarse `RECHAZADO` y `FUERA DE ALCANCE`. Si una entrada tiene un
 
 **Causa:** usar solo secuencia o una ventana sin distinguir la sesión de arranque.
 
-**Situación real:** el fix histórico de V4.1 ya introdujo un `BOOT_ID` nuevo por arranque dentro de `IoTNode`, lo que separa sesiones aunque el valor sea generado por el nodo. Sin embargo, `IoTStorage::getBootId()` implementa además un contador persistente y los firmwares V4 no lo pasan al nodo; esa persistencia es un endurecimiento posterior todavía pendiente.
+**Situación real:** el fix de V4.1 introduce un BOOT_ID por sesión y el código actual de los firmwares unificados consume `storage.getBootId()` una vez y llama `node.begin(bootId)`. La persistencia ya está conectada en código; LittleFS, fallback, reinicios y hardware aún no están verificados.
 
-**Estado:** APLICADO parcialmente y no verificado para la separación de sesiones; BOOT_ID persistente integrado desde `IoTStorage`: PROPUESTO / pendiente V4.
+**Estado:** APLICADO en código; compilación/integración/hardware pendientes.
 
 **Corrección prevista:** obtener una vez el `BOOT_ID` persistente al arrancar, pasarlo explícitamente a `IoTNode`, definir fallback si LittleFS falla y probar cambio de sesión, rollover y ventana de deduplicación.
 
@@ -148,9 +154,9 @@ También pueden usarse `RECHAZADO` y `FUERA DE ALCANCE`. Si una entrada tiene un
 
 **Causa histórica:** había decisiones distribuidas entre `event_handler.cpp` e `IoTAuth`; además, según el análisis actual, `_processIncoming()` puede actualizar registry, responder ACK o deduplicar antes de que los callbacks verifiquen HMAC.
 
-**Situación real:** la decisión de auth del firmware está centralizada en `auth.verifyPacket()`/`_required`, pero la verificación llega desde callbacks después de que `IoTNode` puede actualizar registry, responder ACK o deduplicar. La unificación de decisión y el orden de efectos son propiedades distintas.
+**Situación real:** `IoTNode` aplica `_verifyIncoming()` antes de contar, reconocer, deduplicar, actualizar registry o despachar al callback. El provider se configura desde el firmware, pero la política de ACK ante auth inválida y la cobertura extremo a extremo todavía requieren decisión y pruebas.
 
-**Estado:** APLICADO parcialmente y no verificado para la decisión única; autenticación temprana dentro del núcleo: PROPUESTO / pendiente V4.
+**Estado:** APLICADO en la frontera del nodo; integración, compilación y hardware pendientes.
 
 **Corrección prevista:**
 
@@ -204,10 +210,8 @@ agregarDevice(o);
 
 ## Procedencia y documentos relacionados
 
-- `_drafts/BUGS_FIXED.md`: fuente histórica de BUG-001…BUG-010.
-- `_drafts/bugs.md`: fuente histórica de BUG-011 y de hipótesis de topología.
+- [`DRAFTS_AUDIT.md`](DRAFTS_AUDIT.md): procedencia consolidada de los diez drafts retirados.
 - [`ANALISIS_INICIAL_HALLAZGOS.md`](ANALISIS_INICIAL_HALLAZGOS.md): matriz H-001…H-018 y método de evidencia.
-- [`PLAN_EJECUCION_FUTURA.md`](PLAN_EJECUCION_FUTURA.md): fases para corregir BUG-008 y BUG-010 y validar bugs operativos.
-- [`universal-protocol/INFORME_DRAFTS_RESTANTES.md`](universal-protocol/INFORME_DRAFTS_RESTANTES.md): auditoría completa de los cinco drafts restantes.
+- [`PLAN_EJECUCION_FUTURA.md`](PLAN_EJECUCION_FUTURA.md): fases para validar bugs operativos.
 
 La ausencia de una marca de “VERIFICADO” es intencional: conserva las soluciones sin convertir documentación histórica en evidencia de pruebas que no se ejecutaron.

@@ -2,9 +2,11 @@
 
 Estado: alcance canónico previo a la implementación por bloques.
 
+> **Actualización 2026-09-02:** la trazabilidad de los diez drafts está en [`DRAFTS_AUDIT.md`](DRAFTS_AUDIT.md). Las filas U-09/U-11 deben interpretarse como “integrado en el código actual; compilación, integración y hardware pendientes”. La sirena continúa en F-05. El vocabulario de alarma pertenece a `lib/AlarmProfile/AlarmProfile.h`, no a `IoTProtocol.h`.
+
 ## Objetivo
 
-Conservar `emisor_pir/` y `receptor_bocina/` como respaldo congelado de V3. La versión final se construirá sobre `lib/IoTProtocol/`, `emisor_pir_v4/` y `receptor_central_v4/`, absorbiendo el comportamiento probado de V3 y las mejoras de V4.
+Conservar `legacy/emisor_pir/` y `legacy/receptor_bocina/` como respaldo congelado de V3. La versión final se construirá sobre `lib/IoTProtocol/`, `emisor_pir_unificado/` y `receptor_central_unificado/`, absorbiendo el comportamiento probado de V3 y las mejoras de V4.
 
 No se promoverá la versión final ni se retirará V3 hasta completar tests host, compilación, simulación y validación hardware agrupada.
 
@@ -21,7 +23,7 @@ No se promoverá la versión final ni se retirará V3 hasta completar tests host
 
 | ID | Comportamiento/idea | Procedencia | Estado actual | Clasificación | Destino | Criterio de aceptación |
 |---|---|---|---|---|---|---|
-| U-01 | Lectura independiente de PIR y TIMBRE | `emisor_pir/src/main.cpp`, `docs/ARCHITECTURE.md` | V3 probado por código; V4 conserva dos entradas | U0 | Emisor final V4 | Dos activaciones simultáneas generan dos eventos independientes y ninguno bloquea al otro |
+| U-01 | Lectura independiente de PIR y TIMBRE | `legacy/emisor_pir/src/main.cpp`, `docs/ARCHITECTURE.md` | V3 probado por código; V4 conserva dos entradas | U0 | Emisor final V4 | Dos activaciones simultáneas generan dos eventos independientes y ninguno bloquea al otro |
 | U-02 | PIR por flanco y antirrebote compatible | V3, V4, BUG-003 | V4 usa 200 ms por defecto y mantiene `antireboteMs` configurable | U0 | Emisor final V4 | El valor final es explícito, se prueba con HC-SR501 sostenido y no pierde TIMBRE |
 | U-03 | TIMBRE activo-bajo con antirrebote | V3 y V4 | Implementado en ambas líneas | U0 | Emisor final V4 | Una pulsación produce un solo evento; otra pulsación posterior produce otro |
 | U-04 | ACK y retransmisión no bloqueantes | V3, `IoTNode` V4 | V3 tiene cuatro eventos en vuelo; V4 una reliable en vuelo y cola | U0 | `IoTNode` | Sensor y loop siguen funcionando durante espera, pérdida y reintentos |
@@ -67,7 +69,7 @@ Las filas `F-01..F-08` no se mezclan con el núcleo sin contrato adicional. No s
 
 ## Alcance verificado de este cambio U-16/U-17/U-18
 
-- `receptor_bocina/` y `emisor_pir/` permanecen congelados y sin modificaciones.
+- `legacy/receptor_bocina/` y `legacy/emisor_pir/` permanecen congelados y sin modificaciones.
 - La central V4 inicializa `IoTNode` antes de configurar MQTT. `inicializarMQTT()` no conecta; el primer intento se ejecuta desde `loop()`, después de una oportunidad de `node.loop()` para recibir, procesar y reconocer UDP. El fallback LOCAL, el sondeo de 5 minutos, la reconexión HA de 15 segundos y la prioridad de una bocina activa se conservan.
 - V4 publica sus topics dinámicos y, para MOTION/TIMBRE y estados de la central, publica también el contrato V3 (`casa/alarma/...`). Discovery publica siete configuraciones retained con identificadores `central_alarma_*`, para que la migración no reutilice los `unique_id` de la V3. Los topics de runtime se comparten deliberadamente para conservar automatizaciones; V3 y V4 no deben operar simultáneamente porque también comparten disponibilidad MQTT y la IP estática `192.168.0.201`.
 - El temporizador físico usa comparación por diferencia de `millis()` y no bloquea. Se conserva el temporizador único y no se define una prioridad nueva para eventos simultáneos porque V3 no la documenta.

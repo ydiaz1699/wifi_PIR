@@ -20,4 +20,4 @@ Después del bootstrap, los ACK requieren el `BOOT_ID` conocido tanto en `Remote
 
 `BOOT_ID=0` permanece reservado como sentinel interno de `registerRemote(id, ip, port)`: significa “endpoint conocido, sesión aún desconocida”. No es válido en el wire para ningún paquete entrante, no puede confirmar un reliable ni convertirse en una sesión aprendida. Un `begin(0)` local también se normaliza al valor reservado no cero (`1`).
 
-Este comportamiento se aplica a la biblioteca `IoTNode` usada por `emisor_pir_v4` y `receptor_central_v4`; no modifica V3. La suite host existente cubre el codec `IoTProtocol`, pero no puede probar honestamente el flujo UDP de `IoTNode` porque no incluye un entorno host para `WiFiUDP` ni un simulador de ambos nodos.
+Este comportamiento se aplica a la biblioteca `IoTNode` usada por `emisor_pir_unificado` y `receptor_central_unificado`; no modifica V3. La suite host existente cubre el codec `IoTProtocol`, pero no puede probar honestamente el flujo UDP de `IoTNode` porque no incluye un entorno host para `WiFiUDP` ni un simulador de ambos nodos.

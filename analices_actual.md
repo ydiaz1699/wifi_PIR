@@ -114,23 +114,21 @@ También falta corregir algunas contradicciones documentales:
 Actualmente existen varias variantes:
 
 ```text
-emisor_pir/
-emisor_pir_v4/
+legacy/emisor_pir/
 emisor_pir_unificado/
 
-receptor_bocina/
-receptor_central_v4/
+legacy/receptor_bocina/
 receptor_central_unificado/
 ```
 
-No recomiendo borrar V3 todavía. La transición correcta sería:
+La ruta operativa actual es:
 
 ```text
-emisor_pir_unificado/       ← versión operativa actual
-receptor_central_unificado/ ← versión operativa actual
+emisor_pir_unificado/       ← versión unificada actual
+receptor_central_unificado/ ← versión unificada actual
 
-emisor_pir/                 ← respaldo V3
-receptor_bocina/            ← respaldo V3
+legacy/emisor_pir/          ← respaldo V3
+legacy/receptor_bocina/     ← respaldo V3
 ```
 
 Cuando el gate esté terminado, se puede decidir si se renombran las unificadas a:

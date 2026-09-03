@@ -4,13 +4,14 @@
 
 - **Fecha:** 2026-08-31.
 - **Estado:** auditoría documental completada; implementación pendiente salvo donde se indique evidencia en el código actual.
-- **Fuentes auditadas:** `_drafts/1mejoras.md`, `_drafts/BUGS_FIXED.md`, `_drafts/META_PROMPT.md`, `_drafts/bugs.md` y `_drafts/ideas.md`.
-- **Documento relacionado:** [`INFORME_UNIFICACION.md`](INFORME_UNIFICACION.md), que audita los cuatro drafts de diseño del protocolo universal.
-- **Código funcional modificado durante esta auditoría:** ninguno.
+- **Fuentes históricas auditadas y retiradas:** diez archivos que antes estaban en `_drafts/`; el inventario completo y la trazabilidad vigente están en [`../DRAFTS_AUDIT.md`](../DRAFTS_AUDIT.md).
+- **Informe relacionado:** [`INFORME_UNIFICACION.md`](INFORME_UNIFICACION.md), que conserva la comparación de los cuatro drafts de diseño universal.
+- **Estado:** este informe es histórico y complementario; no depende de que los archivos fuente sigan presentes.
+- **Código funcional modificado durante la auditoría:** ninguno.
 
-Este informe evita que las cinco fuentes se pierdan o se interpreten como un conjunto de tareas ya implementadas. Cada contenido se clasifica contra el código y la documentación canónica actuales, se le asigna un destino y se conserva la incertidumbre cuando no existe una prueba reproducible.
+Este informe evita que las cinco líneas temáticas históricas se pierdan o se interpreten como un conjunto de tareas ya implementadas. La trazabilidad completa de los diez drafts, incluido `instrucciones.md` y los cuatro drafts de diseño universal, está en [`../DRAFTS_AUDIT.md`](../DRAFTS_AUDIT.md). Cada contenido se clasifica contra el código y la documentación canónica actuales, se le asigna un destino y se conserva la incertidumbre cuando no existe una prueba reproducible.
 
-Los drafts originales permanecen en `_drafts/` como evidencia histórica. No se eliminan ni se aplican sus bloques de código automáticamente.
+Los archivos fuente históricos fueron retirados después de consolidar su contenido; este informe se conserva como detalle complementario y no como enlace a archivos vivos.
 
 ## 1. Criterio de evidencia y estados
 

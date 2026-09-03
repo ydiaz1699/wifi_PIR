@@ -1,6 +1,6 @@
 # Candidata unificada V3+V4 — emisor
 
-Este directorio es la candidata unificada V3+V4 del emisor, construida sobre la base actual de `emisor_pir_v4/`.
+Este directorio es la candidata unificada V3+V4 del emisor, construida sobre la base actual de `emisor_pir_unificado/`.
 
 - Comparte `lib/IoTProtocol` con el receptor central unificado y el resto de la línea V4.
 - `emisor_pir/` permanece sin modificaciones como respaldo congelado de V3.

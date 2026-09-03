@@ -1,5 +1,7 @@
 # Análisis inicial y registro de hallazgos
 
+> **Actualización canónica 2026-09-02:** la auditoría completa de los diez drafts y su destino está en [`DRAFTS_AUDIT.md`](DRAFTS_AUDIT.md). Las rutas actuales unificadas son `emisor_pir_unificado/` y `receptor_central_unificado/`; V3 se conserva en `legacy/`. El código actual conecta BOOT_ID persistente y verifica auth antes de efectos internos, pero compilación de firmware, integración y hardware siguen siendo evidencia pendiente.
+>
 > Snapshot auditable del análisis estático realizado el 2026-08-31. Este documento conserva lo observado en el repositorio y define cómo comparar ideas futuras del usuario con las soluciones existentes antes de implementar cambios.
 
 ## 1. Propósito y alcance
@@ -9,7 +11,8 @@ Este documento existe para que una sesión futura pueda retomar el análisis sin
 - el código real es la fuente de verdad del comportamiento implementado;
 - `docs/PLAN_EJECUCION_FUTURA.md` es la guía de ejecución por fases;
 - este archivo conserva el diagnóstico, la trazabilidad de los hallazgos y el método para evaluar nuevas ideas;
-- la auditoría específica de los cinco drafts restantes y su backlog está en [`docs/universal-protocol/INFORME_DRAFTS_RESTANTES.md`](universal-protocol/INFORME_DRAFTS_RESTANTES.md);
+- La auditoría canónica de los diez drafts retirados y su backlog está en [`docs/DRAFTS_AUDIT.md`](DRAFTS_AUDIT.md).
+- `docs/universal-protocol/INFORME_DRAFTS_RESTANTES.md` conserva el informe histórico de cinco drafts de ideas; su cobertura debe leerse junto con `DRAFTS_AUDIT.md`.
 - `docs/ARCHITECTURE.md`, `CHANGELOG.md` y `ROADMAP.md` describen arquitectura, historia y trabajo previsto, respectivamente.
 
 El análisis original fue estático. No se ejecutaron compilaciones, pruebas host, flasheos, pruebas de red, MQTT, OTA ni pruebas con hardware. Toda afirmación de funcionamiento real debe verificarse antes de marcarla como confirmada.
@@ -26,18 +29,18 @@ docs/ROADMAP.md
 docs/PLAN_EJECUCION_FUTURA.md
 network_config.h
 secrets.h.template
-emisor_pir/platformio.ini
-emisor_pir/include/*
-emisor_pir/src/*
-emisor_pir_v4/platformio.ini
-emisor_pir_v4/include/*
-emisor_pir_v4/src/*
-receptor_bocina/platformio.ini
-receptor_bocina/include/*
-receptor_bocina/src/*
-receptor_central_v4/platformio.ini
-receptor_central_v4/include/*
-receptor_central_v4/src/*
+legacy/emisor_pir/platformio.ini
+legacy/emisor_pir/include/*
+legacy/emisor_pir/src/*
+emisor_pir_unificado/platformio.ini
+emisor_pir_unificado/include/*
+emisor_pir_unificado/src/*
+legacy/receptor_bocina/platformio.ini
+legacy/receptor_bocina/include/*
+legacy/receptor_bocina/src/*
+receptor_central_unificado/platformio.ini
+receptor_central_unificado/include/*
+receptor_central_unificado/src/*
 lib/IoTProtocol/*
 ```
 
@@ -49,8 +52,8 @@ El repositorio mantiene dos líneas paralelas:
 
 | Línea | Directorios | Estado | Modelo |
 |---|---|---|---|
-| V3.5.1 | `emisor_pir/`, `receptor_bocina/` | Producción | UDP textual, ACK asíncrono, modo LOCAL/HA |
-| V4.3 | `lib/IoTProtocol/`, `emisor_pir_v4/`, `receptor_central_v4/` | Desarrollo | UDP binario, TLV, CRC16, reliable, heartbeat, HMAC, LittleFS |
+| V3.5.1 | `legacy/emisor_pir/`, `legacy/receptor_bocina/` | Producción | UDP textual, ACK asíncrono, modo LOCAL/HA |
+| V4.3 | `lib/IoTProtocol/`, `emisor_pir_unificado/`, `receptor_central_unificado/` | Desarrollo | UDP binario, TLV, CRC16, reliable, heartbeat, HMAC, LittleFS |
 
 La decisión de conservación es importante: **V3 debe permanecer estable mientras V4 se valida y endurece**. No se debe reescribir producción para acelerar el prototipo.
 
@@ -98,9 +101,9 @@ La matriz separa comportamiento observado de solución propuesta. Las propuestas
 
 | ID | Área | Evidencia / comportamiento observado | Consecuencia | Estado | Próxima comprobación |
 |---|---|---|---|---|---|
-| H-001 | `BOOT_ID` | `IoTStorage::getBootId()` genera un contador persistente, pero `IoTNode::begin()` genera otro valor pseudoaleatorio y los firmwares V4 no pasan el contador persistente | La deduplicación no distingue de forma fiable un reinicio usando la fuente diseñada para ello | Pendiente V4 | Integrar `storage.getBootId()` en `node.begin(bootId)` y probar dos arranques consecutivos |
-| H-002 | Autenticación | HMAC se verifica en callbacks de aplicación, después de que el núcleo puede actualizar registry, responder ACK y tocar deduplicación | Un paquete no autenticado puede producir efectos internos antes de ser rechazado | Pendiente V4 | Mover la validación al núcleo antes de ACK, registry y deduplicación |
-| H-003 | Cobertura HMAC | `STATE_REPORT` puede firmarse condicionalmente; eventos, `HELLO` y heartbeat no se firman uniformemente | La política de seguridad no es coherente para todos los mensajes | Pendiente V4 | Definir qué tipos requieren HMAC y probar emisor/central |
+| H-001 | `BOOT_ID` | `IoTStorage::getBootId()` se consume una vez en los firmwares unificados y se pasa a `IoTNode::begin(bootId)` | La identidad persistente ya está conectada en código; LittleFS/fallback/hardware siguen sin evidencia | Integrado en código; verificación pendiente | Probar dos arranques, fallo de storage y replay |
+| H-002 | Autenticación | `IoTNode::_processIncoming()` ejecuta `_verifyIncoming()` antes de contar, ACK, registry, deduplicación y callback | La frontera temprana está implementada; la política de ACK inválido y las pruebas de integración siguen pendientes | Integrado en código; verificación pendiente | Probar HMAC inválida/ausente, replay y orden observable de efectos |
+| H-003 | Cobertura HMAC | `IoTNode` prepara el tráfico saliente mediante el provider y verifica tráfico entrante en la frontera; la cobertura por tipo y modo aún debe probarse | La política puede ser coherente, pero requiere pruebas de todos los builders y modos | Parcial / pendiente de evidencia | Definir tipos obligatorios y probar emisor/central |
 | H-004 | Persistencia | La documentación habla de `config.json`, pero `IoTStorage` usa líneas `key=value` | Una futura herramienta puede leer o escribir un formato equivocado | Divergencia documental | Elegir un formato, alinearlo y añadir prueba de roundtrip |
 | H-005 | `auth.key` | Existe API de clave en LittleFS, pero la ruta real usa `IOT_AUTH_KEY` de `secrets.h` y no integra claramente la clave persistida | La provisión y rotación de claves no están definidas | Parcial / pendiente | Decidir una única fuente de clave y documentar migración |
 | H-006 | V4 aplicación | Existen tipos `COMMAND`, `CONFIG`, `RESPONSE` y `HELLO_ACK`, pero no hay flujo completo entre MQTT, central y nodo | La extensibilidad declarada no equivale aún a funcionalidad operativa | Parcial | Implementar un caso extremo a extremo, por ejemplo relé o configuración |
