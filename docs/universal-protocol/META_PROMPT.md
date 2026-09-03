@@ -15,11 +15,7 @@
 ### 1. Material recibido
 
 - Fragmentos: 4
-- Fuentes:
-  - `_drafts/plantilla de prompt.md`
-  - `_drafts/prodoco.md`
-  - `_drafts/prompt.md`
-  - `_drafts/prompt2.md`
+- **Fuentes históricas:** cuatro documentos que antes estaban en `_drafts/` (`plantilla de prompt.md`, `prodoco.md`, `prompt.md` y `prompt2.md`).
 - Tamaño total aproximado: 4.535 líneas y 77.937 caracteres.
 - Tipo de material:
   - un meta-prompt general para convertir ideas en especificaciones;

@@ -136,7 +136,7 @@ No se resuelven "de más" — solo lo mínimo para que la interfaz extraída que
 
 1. Construir `NodeProtocol` (nombre a decidir) componiendo las interfaces ya extraídas.
 2. Crear `AlarmProfile`: capa fina en el proyecto de aplicación que define los tags de MOTION/TIMBRE/ARM/DISARM y traduce eventos de hardware a `Message` genéricos.
-3. Migrar `emisor_pir_v4` y `receptor_central_v4`/`receptor_bocina` para usar `NodeProtocol` + `AlarmProfile` en vez de `IoTProtocol` directamente.
+3. Migrar `emisor_pir_unificado` y `receptor_central_unificado`/`legacy/receptor_bocina` para usar `NodeProtocol` + `AlarmProfile` en vez de `IoTProtocol` directamente.
 4. Mantener MQTT y Home Assistant como adaptadores externos que consumen mensajes ya decodificados por `AlarmProfile` — nunca dentro del core.
 
 Validación de esta fase: repetir exactamente el plan de pruebas de hardware que ya tenías (Fase 1 a 8 del informe: USB, protocolo mínimo, sensores, reinicios, MQTT, auth, OTA) pero contra el nuevo stack.

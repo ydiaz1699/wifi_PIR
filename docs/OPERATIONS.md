@@ -1,0 +1,172 @@
+# Operaciones y validación reproducible
+
+Este documento conserva procedimientos operativos que no pertenecen al wire format ni al núcleo `IoTProtocol`. Los comandos deben ejecutarse desde la raíz del repositorio y después de revisar `git status --short`.
+
+## 1. Preflight
+
+```bash
+git status --short
+git branch --show-current
+```
+
+No sobrescribir cambios del usuario. Antes de flashear o aplicar un patch, revisar el diff y confirmar la placa, el puerto, la red y el entorno PlatformIO.
+
+## 2. Compile check host actual
+
+El check aislado está en `tests/host_compile/`. Usa las fuentes reales de `lib/IoTProtocol` y `lib/AlarmProfile`, pero stubs host para Arduino/ESP8266/WiFiUDP.
+
+Valida:
+
+- conversiones wire de `AlarmProfile`;
+- TLV, round-trip, CRC y truncamiento;
+- compilación/enlace de `IoTNode`;
+- `begin()`, `sendHello()`, `sendEvent()`, cola y reliable simulado.
+
+```bash
+g++ -std=c++14 -Wall -Wextra \
+  -Itests/host_compile/compat \
+  -Ilib/IoTProtocol \
+  -Ilib/AlarmProfile \
+  tests/host_compile/check.cpp \
+  tests/host_compile/compat/arduino_stub.cpp \
+  lib/IoTProtocol/IoTProtocol.cpp \
+  lib/IoTProtocol/IoTNode.cpp \
+  -o /tmp/wifi_pir_host_check
+
+/tmp/wifi_pir_host_check
+```
+
+Resultado esperado:
+
+```text
+OK: host compile check wifi_PIR
+```
+
+Este check no demuestra WiFi, UDP físico, MQTT, OTA ni hardware. No confundir `tests/host_compile/compat/Arduino.h` con el stub mínimo histórico `tests/host_compat/Arduino.h`: el primero es el adaptador ampliado para `IoTNode`.
+
+## 3. Tests PlatformIO existentes
+
+El entorno host original de `tests/` continúa siendo la referencia para los tests Unity del codec. Si PlatformIO está instalado:
+
+```bash
+pio test -d tests -e native_test
+```
+
+La suite debe ejecutarse como una sola corrida, no en modo watch. Si el entorno o las dependencias no están disponibles, registrar el bloqueo; no afirmar que pasó.
+
+## 4. Patch histórico de seguridad
+
+El archivo `v4.3.1-security.patch` no existe en el árbol actual. No crear un patch ficticio copiando índices o fences de una conversación anterior.
+
+Si en el futuro existe un patch raw contra esta revisión exacta:
+
+```bash
+git status --short
+git apply --check /ruta/al/patch
+# Solo después de revisar la salida:
+git apply /ruta/al/patch
+git diff --check
+git diff --stat
+git diff
+```
+
+Si `git apply --check` falla, detenerse y regenerar el patch contra el código actual. No aplicar a ciegas ni resolver conflictos borrando cambios.
+
+La aplicación, commit y push requieren revisión humana. No agregar temporalmente `*.patch` a `.gitignore` sin una decisión explícita.
+
+## 5. Compilación de proyectos actuales
+
+Las rutas actuales de desarrollo unificado son:
+
+```text
+emisor_pir_unificado/
+receptor_central_unificado/
+```
+
+La línea V3 conservada está bajo:
+
+```text
+legacy/emisor_pir/
+legacy/receptor_bocina/
+```
+
+Antes de compilar, enumerar los entornos reales:
+
+```bash
+pio project config --json-output -d emisor_pir_unificado
+pio project config --json-output -d receptor_central_unificado
+```
+
+Después usar el entorno que realmente aparezca en cada `platformio.ini`. No reutilizar comandos históricos para `emisor_pir_v4` o `receptor_central_v4`, porque esas rutas no forman parte del árbol actual.
+
+## 6. MQTT/Home Assistant
+
+Un log de `publish()` no demuestra que Home Assistant recibió discovery. La validación debe registrar, sin secretos:
+
+1. broker y topic usados;
+2. payload retained observado;
+3. JSON válido;
+4. availability/LWT;
+5. entidad creada o actualizada en Home Assistant;
+6. resultado después de reiniciar broker o HA.
+
+Ejemplo de inspección local, ajustando host y topic a la configuración real:
+
+```bash
+mosquitto_sub -h <BROKER_HOST> -t 'homeassistant/#' -v -C 20
+```
+
+No copiar IPs históricas del draft sin verificar gateway, subnet, ruta y broker reales. No afirmar “V3.5.2 verificada” solo por observar una llamada a `publish()`.
+
+La regla operativa sigue siendo: UDP y la alarma local tienen prioridad; la reconexión MQTT debe tener backoff y no puede bloquear indefinidamente el loop.
+
+## 7. OTA
+
+OTA es mantenimiento externo al wire protocol. Antes de una prueba:
+
+- confirmar hostname, placa y entorno correctos;
+- mantener credencial OTA separada de WiFi, MQTT y HMAC;
+- probar primero recuperación serial/USB;
+- confirmar que no hay una alarma crítica activa;
+- verificar firewall y red desde el PC real;
+- registrar resultado, versión y recuperación.
+
+La configuración histórica de firewall de Windows no garantiza por sí sola que OTA funcione. ArduinoOTA no debe describirse como rollback garantizado en ESP8266: una actualización interrumpida puede requerir recuperación física.
+
+## 8. Pruebas de red
+
+Para una incidencia UDP, medir antes de cambiar firmware:
+
+```bash
+ip route
+ip addr
+```
+
+En cada equipo registrar gateway, subnet, IP del broker y ruta entre emisor y central. Verificar aislamiento de clientes, bridge/NAT, firewall y acceso al puerto UDP. B622, DMZ y reservas DHCP de los drafts son hipótesis hasta observarlas en la red real.
+
+## 9. Sirena futura
+
+La sirena intermitente permanece pendiente. Antes de implementarla hay que definir `sirenOn()`, `isBusy()`, tiempos, prioridad frente a TIMBRE/MOTION, apagado manual y pruebas de rollover de `millis()`. No copiar el bloque histórico directamente al firmware.
+
+## 10. Evidencia y cierre
+
+Después de cada operación:
+
+```bash
+git diff --check
+git status --short
+```
+
+Registrar separadamente:
+
+```text
+código existente
+compilación
+prueba host
+simulador
+broker/HA
+OTA
+hardware
+```
+
+Una operación que no se ejecutó debe quedar como `PENDIENTE`, no como `VERIFICADA`.

@@ -1,6 +1,8 @@
 # Roadmap — Mejoras Futuras
 
-## Instrucciones para LLM
+> **Actualización canónica 2026-09-02:** los diez drafts fueron auditados y retirados; ver [`DRAFTS_AUDIT.md`](DRAFTS_AUDIT.md). Las rutas activas son `emisor_pir_unificado/`, `receptor_central_unificado/` y `legacy/`. Los nuevos `EventCode`, `DeviceType` y `StateTag` del perfil alarma deben definirse en `lib/AlarmProfile/AlarmProfile.h`; `IoTProtocol.h` solo conserva el vocabulario del core. La evaluación tecnológica V5 sigue pendiente y no modifica V4.
+>
+> ## Instrucciones para LLM
 
 **CONTEXTO**: Este es un sistema de alarma IoT doméstico con ESP8266. Usa un protocolo binario propio (IoTProtocol) sobre UDP en LAN WiFi. El código está en el repo `ydiaz1699/wifi_PIR` en GitHub. Hay dos versiones: V3.5.1 (producción, protocolo texto) y V4.3 (desarrollo, protocolo binario con biblioteca reutilizable).
 
@@ -16,11 +18,11 @@
 
 **ARCHIVOS CLAVE**:
 - `lib/IoTProtocol/` — biblioteca reutilizable (protocolo + nodo + auth + storage + config)
-- `emisor_pir/src/main.cpp` — emisor producción V3.5.1
-- `receptor_bocina/src/alarma.cpp` — recepción UDP producción
-- `receptor_bocina/src/mqtt_cliente.cpp` — MQTT con modo LOCAL/HA
-- `emisor_pir_v4/src/main.cpp` — emisor desarrollo V4.3
-- `receptor_central_v4/src/main.cpp` — receptor desarrollo V4.3
+- `legacy/emisor_pir/src/main.cpp` — emisor producción V3.5.1
+- `legacy/receptor_bocina/src/alarma.cpp` — recepción UDP producción
+- `legacy/receptor_bocina/src/mqtt_cliente.cpp` — MQTT con modo LOCAL/HA
+- `emisor_pir_unificado/src/main.cpp` — emisor desarrollo V4.3
+- `receptor_central_unificado/src/main.cpp` — receptor desarrollo V4.3
 
 ---
 
@@ -337,7 +339,7 @@ Alternativa: comando CONFIG desde la central que active "modo test" (antirebote 
 3. El `main.cpp` es casi idéntico: WiFi + node.begin() + loop con lectura de sensor + node.sendEvent()
 4. NO modificar la biblioteca IoTProtocol
 5. NO modificar el receptor (debe procesar genéricamente)
-6. Si el sensor necesita un EventCode nuevo, agregarlo al enum en `IoTProtocol.h`
+6. Si el sensor necesita un `EventCode` nuevo, agregarlo al perfil correspondiente, normalmente `lib/AlarmProfile/AlarmProfile.h`; no modificar `IoTProtocol.h` por vocabulario específico de la alarma.
 
 ### Al modificar IoTProtocol:
 - El wire format está CONGELADO para V4.x (14 bytes header)
@@ -359,9 +361,9 @@ Alternativa: comando CONFIG desde la central que active "modo test" (antirebote 
 
 ---
 
-## Backlog incorporado de los cinco drafts restantes
+### Backlog consolidado de ideas históricas
 
-Esta sección incorpora las ideas de `_drafts/ideas.md`, `_drafts/1mejoras.md` y `_drafts/bugs.md` sin declararlas implementadas. La trazabilidad completa, incluyendo contenido rechazado y evidencia disponible, está en [`docs/universal-protocol/INFORME_DRAFTS_RESTANTES.md`](universal-protocol/INFORME_DRAFTS_RESTANTES.md).
+Esta sección resume el backlog conservado desde los drafts retirados. La trazabilidad completa está en [`DRAFTS_AUDIT.md`](DRAFTS_AUDIT.md) y el detalle de capabilities en [`universal-protocol/CAPABILITY_DISCOVERY.md`](universal-protocol/CAPABILITY_DISCOVERY.md).
 
 ### Regla de estado
 
@@ -400,7 +402,7 @@ Antes de implementar el backlog de producto, completar las fases 0–7 de `PLAN_
 4. Exponer una consulta interna o adapter MQTT/HA sin introducir topics específicos en el Core.
 5. Definir qué eventos no deben incluir secretos ni payloads sensibles.
 
-**Archivos candidatos:** `receptor_central_v4/`, un módulo de diagnóstico/registro separado y el adapter MQTT; no modificar `IoTProtocol` hasta que el contrato esté justificado.
+**Archivos candidatos:** `receptor_central_unificado/`, un módulo de diagnóstico/registro separado y el adapter MQTT; no modificar `IoTProtocol` hasta que el contrato esté justificado.
 
 **Criterios de aceptación:** 100 entradas máximo, orden estable tras overflow, reinicio probado si se elige persistencia, consulta reproducible y consumo de RAM/flash medido.
 

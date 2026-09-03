@@ -1,6 +1,8 @@
 # Arquitectura del Sistema wifi_PIR
 
-## Resumen
+> **Actualización canónica 2026-09-02:** el árbol actual usa `emisor_pir_unificado/` y `receptor_central_unificado/`; la línea V3 se conserva en `legacy/emisor_pir/` y `legacy/receptor_bocina/`. Las rutas unificadas son las activas de desarrollo y no deben sustituirse por los nombres históricos. El estado de red/IP documentado aquí es una descripción histórica y debe verificarse en la red real. La auditoría de drafts está en [`DRAFTS_AUDIT.md`](DRAFTS_AUDIT.md).
+>
+> ## Resumen
 
 Sistema de alarma doméstica IoT basado en ESP8266 que comunica sensores (PIR, timbre, puertas) con un receptor central mediante UDP sobre WiFi LAN. El receptor activa una bocina local y opcionalmente publica eventos en Home Assistant vía MQTT.
 
@@ -37,22 +39,22 @@ Sistema de alarma doméstica IoT basado en ESP8266 que comunica sensores (PIR, t
 
 Protocolo **texto** simple (`PIR01|5|TIMBRE`), probado y funcionando.
 
-- **Emisor** (`emisor_pir/`): fire-and-forget con ACK asíncrono no-bloqueante
-- **Receptor** (`receptor_bocina/`): drain loop, dedup window de 8, modo LOCAL/HA
+- **Emisor** (`legacy/emisor_pir/`): fire-and-forget con ACK asíncrono no-bloqueante
+- **Receptor** (`legacy/receptor_bocina/`): drain loop, dedup window de 8, modo LOCAL/HA
 
 ### V4.3 (Desarrollo — biblioteca IoTProtocol)
 
 Protocolo **binario** universal con biblioteca reutilizable.
 
 - **Biblioteca** (`lib/IoTProtocol/`): protocolo, nodo, auth, storage, config
-- **Emisor** (`emisor_pir_v4/`): usa IoTNode con cola, heartbeat, discovery
-- **Receptor** (`receptor_central_v4/`): genérico, ONLINE/STALE/OFFLINE, MQTT auto
+- **Emisor** (`emisor_pir_unificado/`): usa IoTNode con cola, heartbeat, discovery
+- **Receptor** (`receptor_central_unificado/`): genérico, ONLINE/STALE/OFFLINE, MQTT auto
 
 ---
 
 ## V3.5.1 — Versión de Producción
 
-### Emisor (`emisor_pir/`)
+### Emisor (`legacy/emisor_pir/`)
 
 **Hardware**: ESP8266 D1 Mini, PIR en D2, botón timbre en D3 (INPUT_PULLUP)
 
@@ -90,7 +92,7 @@ Receptor → Emisor:  "OK|5"              (ACK|eventId)
 - `../secrets.h` — WiFi credentials (no versionado)
 - `../network_config.h` — gateway, subnet, puerto UDP
 
-### Receptor (`receptor_bocina/`)
+### Receptor (`legacy/receptor_bocina/`)
 
 **Hardware**: NodeMCU v2, buzzer en D5, LED en D6
 
@@ -244,7 +246,7 @@ wifi_PIR/
 │   ├── IoTConfigHandler.h/.cpp ← Config remota
 │   └── library.json
 │
-├── emisor_pir/              ← EMISOR V3.5.1 (PRODUCCIÓN)
+├── legacy/emisor_pir/              ← EMISOR V3.5.1 (PRODUCCIÓN)
 │   ├── platformio.ini
 │   ├── include/device_config.h
 │   ├── include/logger.h
@@ -252,19 +254,19 @@ wifi_PIR/
 │       ├── device_config.cpp
 │       └── main.cpp
 │
-├── receptor_bocina/         ← RECEPTOR V3.5.1 (PRODUCCIÓN)
+├── legacy/receptor_bocina/         ← RECEPTOR V3.5.1 (PRODUCCIÓN)
 │   ├── platformio.ini
 │   ├── include/ (alarma, config, hal, logger, mqtt_cliente,
 │   │            mqtt_discovery, ota, red_wifi, state_machine)
 │   └── src/ (alarma, config, hal, main, mqtt_cliente,
 │             mqtt_discovery, ota, red_wifi, state_machine)
 │
-├── emisor_pir_v4/           ← EMISOR V4.3 (DESARROLLO)
+├── emisor_pir_unificado/           ← EMISOR V4.3 (DESARROLLO)
 │   ├── platformio.ini
 │   ├── include/device_config.h, logger.h
 │   └── src/device_config.cpp, main.cpp
 │
-└── receptor_central_v4/     ← RECEPTOR V4.3 (DESARROLLO)
+└── receptor_central_unificado/     ← RECEPTOR V4.3 (DESARROLLO)
     ├── platformio.ini
     ├── include/ (config, hal, logger, event_handler, mqtt_manager)
     └── src/ (config, hal, main, event_handler, mqtt_manager)

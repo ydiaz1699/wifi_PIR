@@ -1,5 +1,7 @@
 # Plan de ejecución futura — wifi_PIR
 
+> **Actualización canónica 2026-09-02:** la trazabilidad de los diez drafts retirados está en [`DRAFTS_AUDIT.md`](DRAFTS_AUDIT.md) y los procedimientos operativos en [`OPERATIONS.md`](OPERATIONS.md). Esta actualización supersede las rutas históricas y los claims de estado que contradigan el código actual.
+>
 > **Documento canónico para continuar el proyecto sin consultar archivos históricos o borradores.**
 >
 > Este documento reúne el estado técnico conocido, las decisiones que deben conservarse, los problemas detectados, el orden de ejecución recomendado, los criterios de aceptación y el trabajo futuro. Una LLM que inicie una sesión nueva debe leer primero este archivo y después inspeccionar el código actual antes de modificarlo.
@@ -70,7 +72,7 @@ La separación final será:
 lib/IoTProtocol/
     protocolo, transporte común, reliability, seguridad y persistencia
 
-emisor_pir/
+legacy/emisor_pir/
     lectura PIR/TIMBRE, configuración del dispositivo y uso de IoTNode
 
 receptor_central/
@@ -83,16 +85,16 @@ La biblioteca recibe y valida mensajes; la central decide si un evento activa la
 
 ```text
 V3.5.1
-├── emisor_pir/
-└── receptor_bocina/
+├── legacy/emisor_pir/
+└── legacy/receptor_bocina/
 
 V4.3 en desarrollo
 ├── lib/IoTProtocol/
-├── emisor_pir_v4/
-└── receptor_central_v4/
+├── emisor_pir_unificado/
+└── receptor_central_unificado/
 ```
 
-No se deben borrar ahora `emisor_pir/` ni `receptor_bocina/`: contienen comportamiento de producción que debe inventariarse, migrarse y verificarse. Los proyectos `emisor_pir_v4/` y `receptor_central_v4/` son transitorios mientras se construye la versión unificada.
+No se deben borrar ahora `legacy/emisor_pir/` ni `legacy/receptor_bocina/`: contienen comportamiento de producción que debe inventariarse, migrarse y verificarse. Los proyectos `emisor_pir_unificado/` y `receptor_central_unificado/` son transitorios mientras se construye la versión unificada.
 
 ### Plan maestro de unificación V3 → V4
 
@@ -111,8 +113,8 @@ Evidencia actual:
 ```text
 emisor_pir              PASS
 receptor_bocina         PASS
-emisor_pir_v4           PASS
-receptor_central_v4     PASS
+emisor_pir_unificado           PASS
+receptor_central_unificado     PASS
 host IoTProtocol        10/10 PASS
 ```
 
@@ -163,11 +165,11 @@ Debe conservar:
 - retransmisión asíncrona;
 - manejo correcto de PIR sostenido en `HIGH`.
 
-El destino final puede ser `emisor_pir/`, reutilizando ese nombre como proyecto único después de migrar y validar. `emisor_pir_v4/` no debe conservarse como segundo emisor permanente.
+El destino final puede ser `legacy/emisor_pir/`, reutilizando ese nombre como proyecto único después de migrar y validar. `emisor_pir_unificado/` no debe conservarse como segundo emisor permanente.
 
 #### U4 — Migrar el receptor V3 a la central V4 — `PENDIENTE`
 
-La central final debe integrar el comportamiento probado de `receptor_bocina/` con `receptor_central_v4/`:
+La central final debe integrar el comportamiento probado de `legacy/receptor_bocina/` con `receptor_central_unificado/`:
 
 ```text
 receptor_central/
@@ -201,7 +203,7 @@ emisor  — Wemos D1 Mini / ESP8266
 central — NodeMCU v2 / ESP8266
 ```
 
-La primera implementación será **ArduinoOTA**, que ya forma parte del ecosistema ESP8266 y requiere menos memoria y dependencias que añadir un servidor web completo. El receptor V3 ya tiene `ArduinoOTA` en `receptor_bocina/src/ota.cpp`; el emisor V4 y la central V4 todavía no tienen el flujo completo conectado aunque la central ya declara un entorno `*_ota` en PlatformIO.
+La primera implementación será **ArduinoOTA**, que ya forma parte del ecosistema ESP8266 y requiere menos memoria y dependencias que añadir un servidor web completo. El receptor V3 ya tiene `ArduinoOTA` en `legacy/receptor_bocina/src/ota.cpp`; el emisor V4 y la central V4 todavía no tienen el flujo completo conectado aunque la central ya declara un entorno `*_ota` en PlatformIO.
 
 La OTA será un **plano de mantenimiento separado** de `lib/IoTProtocol/`: no se añadirá al wire format ni se mezclará con EVENT, ACK, HMAC o capabilities. Si ambos firmwares comparten suficiente código, se podrá crear un helper separado, por ejemplo `lib/IoTOTA/`, pero no se debe introducir lógica OTA dentro de `lib/IoTProtocol/`.
 
@@ -299,14 +301,14 @@ Solo cuando U2, U3, U4 y U6 estén verificadas:
 ```text
 se conserva:
 ├── lib/IoTProtocol/
-├── emisor_pir/
+├── legacy/emisor_pir/
 ├── receptor_central/
 ├── tests/
 └── tools/
 
 se retira o archiva:
-├── emisor_pir_v4/
-├── receptor_central_v4/
+├── emisor_pir_unificado/
+├── receptor_central_unificado/
 └── código V3 duplicado que ya no tenga consumidores
 ```
 
@@ -350,8 +352,8 @@ V4.3   = desarrollo
 Directorios principales:
 
 ```text
-emisor_pir/
-receptor_bocina/
+legacy/emisor_pir/
+legacy/receptor_bocina/
 ```
 
 Características actuales:
@@ -383,15 +385,15 @@ Características actuales:
 Archivos V3 relevantes:
 
 ```text
-emisor_pir/src/main.cpp
-emisor_pir/include/device_config.h
-receptor_bocina/src/main.cpp
-receptor_bocina/src/alarma.cpp
-receptor_bocina/src/mqtt_cliente.cpp
-receptor_bocina/src/mqtt_discovery.cpp
-receptor_bocina/src/hal.cpp
-receptor_bocina/include/hal.h
-receptor_bocina/src/state_machine.cpp
+legacy/emisor_pir/src/main.cpp
+legacy/emisor_pir/include/device_config.h
+legacy/receptor_bocina/src/main.cpp
+legacy/receptor_bocina/src/alarma.cpp
+legacy/receptor_bocina/src/mqtt_cliente.cpp
+legacy/receptor_bocina/src/mqtt_discovery.cpp
+legacy/receptor_bocina/src/hal.cpp
+legacy/receptor_bocina/include/hal.h
+legacy/receptor_bocina/src/state_machine.cpp
 ```
 
 ### 2.2 V4.3 — desarrollo
@@ -400,8 +402,8 @@ Directorios principales:
 
 ```text
 lib/IoTProtocol/
-emisor_pir_v4/
-receptor_central_v4/
+emisor_pir_unificado/
+receptor_central_unificado/
 ```
 
 Características actuales:
@@ -433,9 +435,9 @@ lib/IoTProtocol/IoTStorage.h
 lib/IoTProtocol/IoTStorage.cpp
 lib/IoTProtocol/IoTConfigHandler.h
 lib/IoTProtocol/IoTConfigHandler.cpp
-emisor_pir_v4/src/main.cpp
-receptor_central_v4/src/main.cpp
-receptor_central_v4/src/event_handler.cpp
+emisor_pir_unificado/src/main.cpp
+receptor_central_unificado/src/main.cpp
+receptor_central_unificado/src/event_handler.cpp
 ```
 
 ### 2.3 Diferencia crítica entre V3 y V4
@@ -592,31 +594,18 @@ No cambiar direcciones de red basándose únicamente en una propuesta documental
 
 ### BUG-008 — BOOT_ID y reinicios
 
-**Estado:** pendiente en V4.
+**Estado:** integrado en el código actual; persistencia y verificación pendientes.
 
-El problema es que `IoTStorage::getBootId()` existe, pero `IoTNode::begin()` genera un BOOT_ID aleatorio y los firmwares V4 llaman a `node.begin()` sin pasar el ID persistente.
+`IoTStorage::getBootId()` se consume una vez durante el arranque de `emisor_pir_unificado` y `receptor_central_unificado`, y ese valor se pasa a `IoTNode::begin(bootId)`. Esto conecta la identidad de sesión persistente; no demuestra todavía que LittleFS, el fallback ni dos reinicios físicos funcionen correctamente.
 
-Consecuencia:
+Correcciones y pruebas pendientes:
 
-- La intención de distinguir un reinicio de una retransmisión existe, pero la fuente persistente no está conectada.
+- probar dos arranques consecutivos y mismo `SEQ` con BOOT_ID distinto;
+- probar contador corrupto y LittleFS no montado;
+- confirmar que el fallback no se presenta como persistente;
+- medir el comportamiento de deduplicación y replay en simulador/hardware.
 
-Corrección prevista:
-
-- Añadir una API explícita, por ejemplo:
-
-  ```cpp
-  void begin(uint16_t persistentBootId);
-  ```
-
-- Mantener `begin()` sin argumentos solo como compatibilidad o fallback documentado.
-- En cada firmware V4:
-
-  ```cpp
-  uint16_t bootId = storage.getBootId();
-  node.begin(bootId);
-  ```
-
-- Definir qué ocurre si LittleFS no monta: usar un fallback no persistente y registrar claramente que la protección disminuye.
+La documentación histórica que describía `node.begin()` sin argumento queda supersedida por este estado actual.
 
 ### BUG-009 — secretos en el repositorio
 
@@ -635,37 +624,24 @@ Si hubo exposición real, rotar la clave y no limitarse a borrar el archivo actu
 
 ### BUG-010 — autenticación antes de ACK y deduplicación
 
-**Estado:** pendiente; la documentación de “auth logic unificada” es incorrecta respecto al código actual.
+**Estado:** integrado en la frontera actual de `IoTNode`; integración, política y pruebas pendientes.
 
-En `IoTNode::_processIncoming()` se ejecutan, en esencia, estas operaciones antes del callback:
+En `IoTNode::_processIncoming()` el código actual deserializa y valida estructura/CRC, verifica `_verifyIncoming()` antes de aceptar el paquete y solo después puede contar, reconocer, deduplicar, actualizar registry o despachar al handler. La autenticación del firmware se configura mediante el provider del nodo; ya no debe describirse como un callback tardío que necesariamente deja efectos internos antes del rechazo.
 
-1. Deserializar.
-2. Actualizar remoto.
-3. Responder ACK si corresponde.
-4. Comprobar duplicado.
-5. Llamar al handler.
+La política que aún debe cerrarse es si un paquete autenticado inválido, ausente o fuera de sesión recibe ACK. La recomendación sigue siendo no reconocer un paquete que no pasó autenticación, salvo interoperabilidad documentada.
 
-La verificación HMAC ocurre en callbacks de los firmwares. Por tanto, un paquete inválido puede producir efectos secundarios antes de ser rechazado.
+Pruebas pendientes:
 
-Corrección prevista:
-
-```text
-recibir datagrama
-→ deserializar y validar estructura/CRC
-→ verificar autenticación
-→ validar anti-replay/deduplicación
-→ enviar ACK según la política definida
-→ actualizar registry
-→ despachar al handler
-```
-
-Debe decidirse si los paquetes inválidos reciben ACK. La recomendación inicial es no reconocer un paquete que no pasó autenticación, salvo que exista una razón de interoperabilidad documentada.
+- HMAC incorrecta y ausente;
+- duplicado válido y replay fuera de ventana;
+- observación de que no se actualizan registry, dedup, ACK ni callback cuando la verificación falla;
+- integración y hardware con auth opcional/obligatoria.
 
 ### BUG-011 — ArduinoJson en discovery
 
 **Estado:** corregido en el código actual.
 
-`receptor_bocina/src/mqtt_discovery.cpp` usa `doc.to<JsonObject>()`. La documentación histórica debe describirlo como fix aplicado, no como tarea pendiente.
+`legacy/receptor_bocina/src/mqtt_discovery.cpp` usa `doc.to<JsonObject>()`. La documentación histórica debe describirlo como fix aplicado, no como tarea pendiente.
 
 Pendiente documental:
 
@@ -804,16 +780,16 @@ Las fases deben ejecutarse en este orden. No saltar directamente a nuevos sensor
    lib/IoTProtocol/IoTAuth.cpp
    lib/IoTProtocol/IoTStorage.h
    lib/IoTProtocol/IoTStorage.cpp
-   emisor_pir_v4/src/main.cpp
-   receptor_central_v4/src/main.cpp
-   receptor_central_v4/src/event_handler.cpp
+   emisor_pir_unificado/src/main.cpp
+   receptor_central_unificado/src/main.cpp
+   receptor_central_unificado/src/event_handler.cpp
    ```
 
 3. Buscar conexiones reales:
 
    ```bash
    grep -R "node.begin\|getBootId\|verifyPacket\|signPacket\|_processIncoming\|isDuplicate" -n \
-     lib emisor_pir_v4 receptor_central_v4
+     lib emisor_pir_unificado receptor_central_unificado
    ```
 
 4. Compilar la V3 de producción sin modificarla:
@@ -826,8 +802,8 @@ Las fases deben ejecutarse en este orden. No saltar directamente a nuevos sensor
 5. Compilar los dos firmwares V4:
 
    ```bash
-   pio run -d emisor_pir_v4
-   pio run -d receptor_central_v4
+   pio run -d emisor_pir_unificado
+   pio run -d receptor_central_unificado
    ```
 
 6. Registrar en una tabla:
@@ -931,8 +907,8 @@ La configuración exacta debe ajustarse a las dependencias reales de PlatformIO.
 ```text
 lib/IoTProtocol/IoTNode.h
 lib/IoTProtocol/IoTNode.cpp
-emisor_pir_v4/src/main.cpp
-receptor_central_v4/src/main.cpp
+emisor_pir_unificado/src/main.cpp
+receptor_central_unificado/src/main.cpp
 ```
 
 #### Diseño recomendado
@@ -1304,12 +1280,12 @@ No usar `millis() >= deadline` como única comparación si se quiere manejar rol
 #### Cambios probables
 
 ```text
-receptor_bocina/include/hal.h
-receptor_bocina/src/hal.cpp
-receptor_bocina/include/config.h
-receptor_bocina/src/config.cpp
-receptor_bocina/src/alarma.cpp
-receptor_bocina/src/mqtt_cliente.cpp
+legacy/receptor_bocina/include/hal.h
+legacy/receptor_bocina/src/hal.cpp
+legacy/receptor_bocina/include/config.h
+legacy/receptor_bocina/src/config.cpp
+legacy/receptor_bocina/src/alarma.cpp
+legacy/receptor_bocina/src/mqtt_cliente.cpp
 ```
 
 #### Criterios de aceptación
@@ -1443,7 +1419,7 @@ El objetivo inmediato es habilitar actualización OTA de firmware para el emisor
 
 Usar la biblioteca `ArduinoOTA` del core ESP8266 en ambos firmwares:
 
-- el receptor V3 ya tiene una implementación parcial en `receptor_bocina/src/ota.cpp`;
+- el receptor V3 ya tiene una implementación parcial en `legacy/receptor_bocina/src/ota.cpp`;
 - el emisor V4 debe añadir inicialización y atención OTA;
 - la central V4 debe añadir inicialización y atención OTA, no solo el entorno `upload_protocol = espota`;
 - cada equipo debe tener hostname y credencial identificables;
@@ -1721,8 +1697,8 @@ pio run -d receptor_bocina
 ### Compilación V4
 
 ```bash
-pio run -d emisor_pir_v4
-pio run -d receptor_central_v4
+pio run -d emisor_pir_unificado
+pio run -d receptor_central_unificado
 ```
 
 ### Tests futuros
@@ -1792,16 +1768,16 @@ La siguiente LLM debe preferir una implementación pequeña, verificable y rever
 ## 13. Segunda auditoría histórica con `unificador-skill`
 
 **Fecha de auditoría:** 2026-08-30
-**Objetivo:** comprobar que este plan no perdió información relevante de los 11 drafts históricos eliminados del árbol de trabajo.
+**Objetivo:** comprobar que el plan no perdió información relevante de los diez archivos históricos y del patch ausente descrito por las instrucciones. La matriz canónica vigente está en [`DRAFTS_AUDIT.md`](DRAFTS_AUDIT.md).
 
-Los drafts fueron recuperados desde el commit padre mediante un worktree temporal de solo lectura. No se aplicó ningún patch, no se modificó el firmware y no se ejecutaron compilaciones ni pruebas hardware durante esta auditoría.
+Los diez archivos históricos fueron consolidados y retirados después de verificar su trazabilidad. No se aplicó ningún patch, no se modificó el firmware como parte de esta auditoría y las pruebas deben distinguirse de la documentación.
 
 ### 13.1 ANÁLISIS PREVIO DE FRAGMENTOS
 
 ```text
-Material recibido: 11 archivos históricos en _drafts/
-Tamaño: 6.179 líneas y 128.633 bytes; conjunto largo (>30K)
-Fuentes: notas técnicas, diagnósticos, meta-prompts, instrucciones y patch de seguridad
+Material recibido: 10 archivos históricos en el antiguo `_drafts/` y una referencia a un patch que no existe
+Tamaño: conjunto documental largo (>30K)
+Fuentes: notas técnicas, diagnósticos, meta-prompts e instrucciones
 Documento canónico comparado: este archivo, 1.425 líneas antes de esta auditoría
 Tema central: preservar V3.5.1, estabilizar V4.3 y decidir posteriormente una arquitectura V5
 

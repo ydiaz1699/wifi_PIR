@@ -1,6 +1,8 @@
 # Changelog
 
-## V3.1 (Versión original)
+> **Actualización documental 2026-09-02:** las afirmaciones históricas de V4.3 sobre “auth logic unificada” y “BOOT_ID persistente” no equivalen a verificación de integración/hardware. El estado actual y la trazabilidad de los drafts están en [`BUGS_FIXED.md`](BUGS_FIXED.md), [`PLAN_EJECUCION_FUTURA.md`](PLAN_EJECUCION_FUTURA.md) y [`DRAFTS_AUDIT.md`](DRAFTS_AUDIT.md).
+>
+> ## V3.1 (Versión original)
 - Protocolo texto: `PIR01|eventId|MOTION` / `OK|eventId`
 - Emisor: máquina de estados TX bloqueante (IDLE→SENDING→WAIT_ACK→DONE)
 - Receptor: MQTT obligatorio, sin modo local
