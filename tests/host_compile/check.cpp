@@ -281,6 +281,18 @@ bool check_node_api() {
         return false;
     }
 
+    // HELLO solo tolera perder FW_VERSION; si falta un campo de identidad
+    // crítico, debe descartarse en lugar de encolar discovery incompleto.
+    IoTNode invalidHello(0x02, 4210);
+    invalidHello.begin(1234);
+    invalidHello.sendHello(central, 4210,
+                           AlarmProfile::toWire(AlarmProfile::DeviceType::PIR_SENSOR),
+                           "nombre demasiado largo para el payload de discovery");
+    if (!expect(invalidHello.queuedCount() == 0,
+                "HELLO sin DEVICE_NAME no fue descartado")) {
+        return false;
+    }
+
     // El primer loop toma el primer reliable de la cola; el segundo ejercita
     // la transmisión a través del stub WiFi/UDP y deja el ACK pendiente.
     node.loop();

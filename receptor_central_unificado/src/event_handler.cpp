@@ -272,7 +272,7 @@ void handleIoTPacket(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePo
         }
 
         case MsgType::HELLO: {
-            char name[20] = "";
+            char name[IOT_DEVICE_NAME_MAX] = "";
             uint8_t devType = 0;
             pkt.getTLV_string(TlvTag::DEVICE_NAME, name, sizeof(name));
             pkt.getTLV_uint8(TlvTag::DEVICE_TYPE_TAG, devType);

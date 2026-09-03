@@ -1,5 +1,5 @@
 /**
- * IoTNode V4.1 — Nodo de comunicación IoTProtocol
+ * IoTNode V4.3 — Nodo de comunicación IoTProtocol
  *
  * Cambios vs V4.0:
  * - FIFO real con head/tail/count (no tabla de slots)
