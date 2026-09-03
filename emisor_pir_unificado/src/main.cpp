@@ -53,8 +53,9 @@ static void configureAuthProvider(bool enabled) {
 }
 
 // --- Estado de sensores ---
-bool pirAnterior = LOW;
-bool timbreAnterior = HIGH;
+// Ambos estados usan semántica lógica: true = activo, false = inactivo.
+bool pirAnterior = false;
+bool timbreAnterior = false;
 unsigned long ultimaDeteccionPIR = 0;
 unsigned long ultimaDeteccionTimbre = 0;
 
@@ -116,7 +117,7 @@ static void sendStateReport(IPAddress destIP, uint16_t destPort) {
     pkt.addTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_MOTION),
                      pirAnterior ? 1 : 0);
     pkt.addTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_BUTTON),
-                     timbreAnterior == LOW ? 1 : 0);
+                     timbreAnterior ? 1 : 0);
     pkt.addTLV_uint32(TlvTag::UPTIME_SEC, millis() / 1000);
     pkt.addTLV_int8(TlvTag::RSSI_VAL, (int8_t)WiFi.RSSI());
     pkt.addTLV_uint32(TlvTag::FREE_HEAP, ESP.getFreeHeap());
@@ -178,6 +179,11 @@ void setup() {
     pinMode(PIN_PIR, INPUT);
     pinMode(PIN_TIMBRE, INPUT_PULLUP);
 
+    // Sincronizar el estado lógico con el nivel físico antes de habilitar el
+    // loop del sensor: el estado presente al arranque no es un flanco nuevo.
+    pirAnterior = digitalRead(PIN_PIR) == HIGH;
+    timbreAnterior = digitalRead(PIN_TIMBRE) == LOW;
+
     // --- LittleFS + Storage ---
     const bool storageReady = storage.begin();
     if (storageReady) {
@@ -212,28 +218,29 @@ void setup() {
         LOG_WARN("WiFi no disponible: OTA se inicializará al reconectar");
     }
 
-    // IoTNode con BOOT_ID persistente
+    // IoTNode con BOOT_ID persistente. La política de auth queda instalada
+    // antes de registrar el callback y antes de enviar HELLO; no se llama a
+    // node.loop() durante setup, pero el orden deja lista la frontera antes
+    // de cualquier recepción normal.
     node.begin(bootId);
-
-    node.onPacketReceived(onPacketReceived);
-
-    // Heartbeat con intervalo de config persistida
-    node.enableHeartbeat(central_IP, UDP_PORT, storage.config().heartbeatIntervalMs);
+    auth.setRequired(storage.config().authEnabled);
+    configureAuthProvider(storage.config().authEnabled);
 
     // --- Config Handler ---
     static IoTConfigHandler cfgHandler(storage, node);
     cfgHandler.onConfigApplied(onConfigApplied);
     configHandler = &cfgHandler;
 
-    // Sincronizar auth con config persistida. DISABLED es bypass total;
-    // REQUIRED verifica antes de cualquier efecto de IoTNode.
-    auth.setRequired(storage.config().authEnabled);
-    configureAuthProvider(storage.config().authEnabled);
+    node.onPacketReceived(onPacketReceived);
+
+    // Heartbeat con intervalo de config persistida
+    node.enableHeartbeat(central_IP, UDP_PORT, storage.config().heartbeatIntervalMs);
 
     LOG_INFO("IoTNode (bootId=0x%04X, puerto=%d)", node.getBootId(), UDP_PORT);
     LOG_INFO("Auth: %s", storage.config().authEnabled ? "HABILITADO" : "deshabilitado");
 
-    // HELLO (discovery)
+    // HELLO (discovery), después de dejar lista la recepción, auth, config y
+    // heartbeat. IoTNode lo entrega por reliable y reintenta si no hay ACK.
     node.sendHello(central_IP, UDP_PORT, AlarmProfile::toWire(MY_DEVICE_TYPE), MY_DEVICE_NAME);
 
     LOG_INFO("Setup completo — monitoreando sensores...");
@@ -259,7 +266,9 @@ void loop() {
 
     // Antirebote desde config persistida
     unsigned long antirebotePIR = storage.config().antireboteMs;
-    unsigned long antireboteTimbre = 800;  // Fijo para timbre
+    // El antirrebote del timbre es un parámetro local del perfil de hardware.
+    // No reutiliza CFG_ANTIREBOTE_MS, que pertenece al PIR.
+    unsigned long antireboteTimbre = ANTIREBOTE_TIMBRE_MS;
 
     // --- PIR: flanco de subida ---
     bool pirActual = digitalRead(PIN_PIR) == HIGH;

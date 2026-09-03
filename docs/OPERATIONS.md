@@ -186,3 +186,19 @@ Correcciones aplicadas en la revisión 2026-09-02:
 - TAMPER queda explícitamente en modo publicación/log sin bocina hasta aprobar su política de seguridad.
 
 Esto no prueba todavía PubSubClient, MQTT/HA, STATE_SYNC en nodos reales ni hardware. La deduplicación de comandos MQTT y la política final de TAMPER siguen siendo decisiones de producto pendientes.
+
+
+
+## 12. Gate de integración del emisor PIR V4
+
+Correcciones aplicadas en la revisión de integración:
+
+- `pirAnterior` y `timbreAnterior` usan semántica lógica (`true` = activo) y se inicializan desde los pines después de `pinMode()`. El nivel presente durante el arranque no se interpreta como un flanco nuevo.
+- El antirrebote del PIR continúa viniendo de `IoTStorage::config().antireboteMs`; el del timbre usa `ANTIREBOTE_TIMBRE_MS` del perfil de hardware. `CFG_ANTIREBOTE_MS` no reconfigura el timbre porque no existe un campo/contrato separado para ello.
+- El emisor instala la política de autenticación, el handler de configuración, el callback de paquetes y el heartbeat antes de enviar HELLO. HELLO usa la cola reliable de `IoTNode`; no se añade un HELLO periódico sin una política de intervalo.
+- `STATE_BUTTON=1` significa timbre presionado y `STATE_BUTTON=0` liberado.
+- `IoTConfigHandler` envía `RESPONSE` antes de ejecutar el callback que cambia la política HMAC. Esa transición es deliberada: la respuesta usa la política anterior. La central todavía no implementa el flujo CONFIG/RESPONSE completo ni matching por `CMD_ID`.
+- `IoTNode` mantiene la liveness por `lastSeen` de cualquier paquete válido, usando `IOT_STALE_TIMEOUT_MS=90000` e `IOT_OFFLINE_TIMEOUT_MS=180000`. La constante duplicada `HEARTBEAT_TIMEOUT_MS` de la central fue retirada; convertir la liveness en “último heartbeat” requiere un contrato separado.
+- OTA permanece pausada para sensores y tráfico de aplicación mientras `otaEnProgreso()` es verdadero. No se fuerza `ESP.restart()` desde `onEnd()` porque el framework ESP8266 controla el reinicio normal; esa ruta debe validarse con hardware y firmware/filesystem OTA.
+
+Pendiente para el gate físico: probar STATE_REQUEST inmediatamente tras arranque, pérdida y recuperación de central, retransmisiones/ACK con pérdida UDP, transición CONFIG/HMAC, OTA durante actividad de sensores y reinicios independientes/simultáneos. Estas pruebas no se consideran verificadas por una compilación.

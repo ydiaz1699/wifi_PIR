@@ -52,4 +52,5 @@ const unsigned long MQTT_SONDEO_INTERVAL_MS = 300000;
 // Tras tres fallos HA, probar de nuevo en 60s; los sondeos LOCAL siguientes
 // conservan el intervalo normal de 5 minutos.
 const unsigned long MQTT_SONDEO_DESPUES_DE_CAIDA_MS = 60000;
-const unsigned long HEARTBEAT_TIMEOUT_MS = 180000;
+// Heartbeat interval is defined by IoTNode's liveness policy:
+// IOT_STALE_TIMEOUT_MS/IOT_OFFLINE_TIMEOUT_MS. Do not duplicate it here.
