@@ -1,7 +1,11 @@
 /**
- * IoTProtocol V4.1 — Protocolo binario universal para redes de sensores ESP8266/ESP32
+ * IoTProtocol V4.3 — Protocolo binario universal para redes ESP8266/ESP32
  *
- * Cambios V4.0 → V4.1:
+ * El paquete actual es V4.3; el formato wire permanece compatible con V4.1
+ * (`IOT_PROTOCOL_VER = 0x41`). Este header define el contrato wire común;
+ * las mejoras de storage, HMAC y operación viven en sus módulos respectivos.
+ *
+ * Contrato wire introducido en V4.1:
  * - SEQ ampliado de 16 a 32 bits (elimina preocupaciones por rollover)
  * - BOOT_ID de 16 bits en cabecera (resuelve reinicio + SEQ vuelve a 1)
  * - Validación estricta: len == expectedLen, version check
