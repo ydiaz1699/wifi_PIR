@@ -6,3 +6,5 @@
 
 secrets.h
 **/secrets.h
+network_config.h
+**/network_config.h

@@ -114,17 +114,43 @@ static void sendStateReport(IPAddress destIP, uint16_t destPort) {
     pkt.flags = 0;
     pkt.clearPayload();
 
-    pkt.addTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_MOTION),
-                     pirAnterior ? 1 : 0);
-    pkt.addTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_BUTTON),
-                     timbreAnterior ? 1 : 0);
-    pkt.addTLV_uint32(TlvTag::UPTIME_SEC, millis() / 1000);
-    pkt.addTLV_int8(TlvTag::RSSI_VAL, (int8_t)WiFi.RSSI());
-    pkt.addTLV_uint32(TlvTag::FREE_HEAP, ESP.getFreeHeap());
+    bool complete = true;
+    if (!pkt.addTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_MOTION),
+                           pirAnterior ? 1 : 0)) {
+        LOG_WARN("STATE_REPORT: TLV STATE_MOTION no pudo agregarse");
+        complete = false;
+    }
+    if (!pkt.addTLV_uint8(AlarmProfile::toCoreTlvTag(AlarmProfile::StateTag::STATE_BUTTON),
+                           timbreAnterior ? 1 : 0)) {
+        LOG_WARN("STATE_REPORT: TLV STATE_BUTTON no pudo agregarse");
+        complete = false;
+    }
+    if (!pkt.addTLV_uint32(TlvTag::UPTIME_SEC, millis() / 1000)) {
+        LOG_WARN("STATE_REPORT: TLV UPTIME_SEC no pudo agregarse");
+        complete = false;
+    }
+    if (!pkt.addTLV_int8(TlvTag::RSSI_VAL, (int8_t)WiFi.RSSI())) {
+        LOG_WARN("STATE_REPORT: TLV RSSI_VAL no pudo agregarse");
+        complete = false;
+    }
+    if (!pkt.addTLV_uint32(TlvTag::FREE_HEAP, ESP.getFreeHeap())) {
+        LOG_WARN("STATE_REPORT: TLV FREE_HEAP no pudo agregarse");
+        complete = false;
+    }
 
     const IoTStats& stats = node.getStats();
-    pkt.addTLV_uint32(TlvTag::TX_COUNT, stats.txPackets);
-    pkt.addTLV_uint32(TlvTag::ACK_TIMEOUTS, stats.ackTimeouts);
+    if (!pkt.addTLV_uint32(TlvTag::TX_COUNT, stats.txPackets)) {
+        LOG_WARN("STATE_REPORT: TLV TX_COUNT no pudo agregarse");
+        complete = false;
+    }
+    if (!pkt.addTLV_uint32(TlvTag::ACK_TIMEOUTS, stats.ackTimeouts)) {
+        LOG_WARN("STATE_REPORT: TLV ACK_TIMEOUTS no pudo agregarse");
+        complete = false;
+    }
+    if (!complete) {
+        LOG_ERROR("STATE_REPORT no enviado: payload incompleto");
+        return;
+    }
 
     // IoTNode firma aquí todas las salidas V4 cuando el proveedor está activo.
     // No firmar manualmente STATE_REPORT: evita doble TLV AUTH_HMAC4.
@@ -187,7 +213,9 @@ void setup() {
     // --- LittleFS + Storage ---
     const bool storageReady = storage.begin();
     if (storageReady) {
-        storage.loadConfig();
+        if (!storage.loadConfig()) {
+            LOG_WARN("Config ausente o inválida: usando defaults");
+        }
     } else {
         LOG_ERROR("Storage FAIL: usando defaults");
     }
@@ -201,6 +229,9 @@ void setup() {
                  storage.config().deviceName);
     } else {
         LOG_WARN("BOOT_ID no persistente por fallo de Storage: 0x%04X", bootId);
+    }
+    if (!storage.isBootIdPersistent()) {
+        LOG_ERROR("BOOT_ID degradado: la sesión puede repetirse tras otro reinicio");
     }
 
     iniciarWiFi();

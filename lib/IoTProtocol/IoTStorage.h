@@ -3,12 +3,12 @@
  *
  * Proporciona:
  * - Boot counter persistente (reemplaza random BOOT_ID → determinístico e incremental)
- * - Almacenamiento de configuración del dispositivo (JSON)
+ * - Almacenamiento de configuración del dispositivo (key=value + CRC16)
  * - Clave de autenticación persistente
  *
  * Archivos en LittleFS:
  *   /iot/boot_count    — uint32_t en texto (1 línea)
- *   /iot/config.json   — configuración del dispositivo
+ *   /iot/config.json   — configuración key=value + checksum CRC16
  *   /iot/auth.key      — clave HMAC (binario, 16-32 bytes)
  *
  * Uso:
@@ -28,15 +28,15 @@
 #pragma once
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
+#include "IoTProtocol.h"
 
 // Tamaños máximos
-#define IOT_STORAGE_NAME_MAX     24
 #define IOT_STORAGE_KEY_MAX      32
 
 // Configuración persistente
 struct IoTConfig {
     // Identidad
-    char     deviceName[IOT_STORAGE_NAME_MAX];
+    char     deviceName[IOT_DEVICE_NAME_MAX];
     uint8_t  deviceId;
 
     // Red
@@ -69,8 +69,17 @@ public:
     /**
      * Obtiene el BOOT_ID actual (incrementa el counter y persiste).
      * Llamar una vez al boot. Es uint16_t (wraps en 65535 → 1).
+     * Si LittleFS o el contador fallan, devuelve un ID volátil no cero y
+     * `isBootIdPersistent()` queda en false.
      */
     uint16_t getBootId();
+
+    /**
+     * Indica si el BOOT_ID devuelto por getBootId() quedó persistido.
+     * false significa modo degradado: la deduplicación entre reinicios no
+     * puede garantizar una nueva sesión.
+     */
+    bool isBootIdPersistent() const { return _bootIdPersistent; }
 
     /**
      * Lee el boot counter sin incrementar.
@@ -130,8 +139,11 @@ private:
     uint32_t _bootCount;
     IoTConfig _config;
     bool _mounted;
+    bool _bootCounterValid;
+    bool _bootIdPersistent;
 
     bool _readBootCount();
     bool _writeBootCount();
+    uint16_t _volatileBootId() const;
     void _setDefaults();
 };

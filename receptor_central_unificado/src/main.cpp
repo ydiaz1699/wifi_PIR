@@ -137,7 +137,9 @@ void setup() {
     // --- Storage ---
     const bool storageReady = storage.begin();
     if (storageReady) {
-        storage.loadConfig();
+        if (!storage.loadConfig()) {
+            LOG_WARN("Config ausente o inválida: usando defaults");
+        }
     } else {
         LOG_ERROR("Storage FAIL");
     }
@@ -149,6 +151,9 @@ void setup() {
                  (unsigned long)storage.getBootCount(), bootId);
     } else {
         LOG_WARN("BOOT_ID no persistente por fallo de Storage: 0x%04X", bootId);
+    }
+    if (!storage.isBootIdPersistent()) {
+        LOG_ERROR("BOOT_ID degradado: la sesión puede repetirse tras otro reinicio");
     }
 
     // Auth: verificar paquetes si habilitado en config

@@ -120,7 +120,7 @@ struct RemoteDevice {
 
     // Registry (se llena con HELLO)
     uint8_t   deviceType;
-    char       name[20];
+    char       name[IOT_DEVICE_NAME_MAX];
     char       fwVersion[12];
 
     // Estado de vida
