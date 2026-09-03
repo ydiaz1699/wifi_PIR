@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """unittest coverage for tools/iot_simulator.py; no pytest dependency."""
 
+import hashlib
+import hmac
+import struct
 import sys
 import unittest
 from pathlib import Path
@@ -58,6 +61,34 @@ class AuthenticationTests(unittest.TestCase):
     def setUp(self):
         self.key = b"unit-test-only-key"
         self.packet = sim.Packet(seq=4, payload=sim.event_payload(0x01))
+
+    def test_hmac_known_vector(self):
+        key = b"known-vector-key"
+        packet = sim.Packet(
+            msg_type=sim.MsgType.EVENT,
+            src=0x02,
+            dst=0x01,
+            boot_id=0x1234,
+            seq=0x01020304,
+            flags=0x03,
+            payload=sim.event_payload(0x06),
+        )
+        header = struct.pack(
+            ">BBBBHIB",
+            packet.version,
+            int(packet.msg_type),
+            packet.src,
+            packet.dst,
+            packet.boot_id,
+            packet.seq,
+            packet.flags & ~sim.AUTH_FLAG,
+        )
+        expected = bytes.fromhex("7b5f5cee")
+        self.assertEqual(hmac.new(key, header + packet.payload, hashlib.sha256).digest()[:4], expected)
+        signed = sim.sign_packet(packet, key)
+        auth_values = [value for tag, value in sim.iter_tlvs(signed.payload) if tag == sim.AUTH_TLV]
+        self.assertEqual(auth_values, [expected])
+
 
     def test_hmac_valid(self):
         signed = sim.sign_packet(self.packet, self.key)

@@ -3,16 +3,19 @@
  *
  * Usa LittleFS (incluido en ESP8266 Arduino core) para persistir:
  * - Boot counter: archivo simple con un número
- * - Config: JSON minificado con ArduinoJson
+ * - Configuración: archivo key=value con CRC16 de integridad
  * - Auth key: archivo binario
  */
 
 #include "IoTStorage.h"
 #include <LittleFS.h>
+#include <stdlib.h>
+#include <string.h>
 
 // Paths en el filesystem
 static const char* PATH_BOOT_COUNT = "/iot/boot_count";
 static const char* PATH_CONFIG     = "/iot/config.json";
+static const char* PATH_CONFIG_TMP = "/iot/config.json.tmp";
 static const char* PATH_AUTH_KEY   = "/iot/auth.key";
 
 // ============================================================
@@ -20,7 +23,8 @@ static const char* PATH_AUTH_KEY   = "/iot/auth.key";
 // ============================================================
 
 IoTStorage::IoTStorage()
-    : _bootCount(0), _mounted(false)
+    : _bootCount(0), _mounted(false), _bootCounterValid(false),
+      _bootIdPersistent(false)
 {
     _setDefaults();
 }
@@ -35,18 +39,25 @@ bool IoTStorage::begin() {
         LittleFS.format();
         if (!LittleFS.begin()) {
             _mounted = false;
+            _bootCounterValid = false;
+            _bootIdPersistent = false;
             return false;
         }
     }
     _mounted = true;
 
     // Crear directorio si no existe
-    if (!LittleFS.exists("/iot")) {
-        LittleFS.mkdir("/iot");
+    if (!LittleFS.exists("/iot") && !LittleFS.mkdir("/iot")) {
+        _mounted = false;
+        _bootCounterValid = false;
+        _bootIdPersistent = false;
+        return false;
     }
 
-    // Leer boot counter
-    _readBootCount();
+    // Leer boot counter; un archivo ausente es un contador válido en cero,
+    // pero un archivo ilegible/corrupto activa el modo degradado.
+    _bootCounterValid = _readBootCount();
+    _bootIdPersistent = _bootCounterValid;
 
     return true;
 }
@@ -56,13 +67,34 @@ bool IoTStorage::begin() {
 // ============================================================
 
 uint16_t IoTStorage::getBootId() {
-    if (!_mounted) return (uint16_t)(micros() & 0xFFFF);  // Fallback si no hay FS
+    if (!_mounted || !_bootCounterValid) {
+        _bootIdPersistent = false;
+        return _volatileBootId();
+    }
 
-    _bootCount++;
-    _writeBootCount();
+    if (_bootCount == 0xFFFFFFFFUL) {
+        _bootCount = 0;
+    }
+    ++_bootCount;
 
-    // Wrapping: nunca usar 0
+    if (!_writeBootCount()) {
+        // No anunciar una sesión persistente si el contador no llegó al FS.
+        _bootIdPersistent = false;
+        return _volatileBootId();
+    }
+
+    _bootIdPersistent = true;
+    // Wrapping: nunca usar 0.
     uint16_t id = (uint16_t)(_bootCount & 0xFFFF);
+    if (id == 0) id = 1;
+    return id;
+}
+
+uint16_t IoTStorage::_volatileBootId() const {
+    // Opción A del brief: conservar operación degradada, pero hacerla
+    // explícita. Este valor no garantiza unicidad entre reinicios.
+    uint16_t id = static_cast<uint16_t>(micros()) ^
+                  static_cast<uint16_t>(analogRead(A0) << 8);
     if (id == 0) id = 1;
     return id;
 }
@@ -78,8 +110,17 @@ bool IoTStorage::_readBootCount() {
 
     String line = f.readStringUntil('\n');
     f.close();
+    line.trim();
+    if (line.length() == 0) return false;
 
-    _bootCount = line.toInt();
+    for (unsigned int i = 0; i < line.length(); ++i) {
+        const char c = line.charAt(i);
+        if (c < '0' || c > '9') return false;
+    }
+
+    const long parsed = line.toInt();
+    if (parsed < 0) return false;
+    _bootCount = static_cast<uint32_t>(parsed);
     return true;
 }
 
@@ -93,71 +134,167 @@ bool IoTStorage::_writeBootCount() {
 }
 
 // ============================================================
-// Configuración — Load/Save JSON simplificado
+// Configuración — formato key=value con CRC16
 // (Sin ArduinoJson para no agregar dependencia extra a la lib)
 // Formato simple: key=value por línea
 // ============================================================
 
 bool IoTStorage::loadConfig() {
+    _setDefaults();
     if (!_mounted || !LittleFS.exists(PATH_CONFIG)) {
-        _setDefaults();
         return false;
     }
 
     File f = LittleFS.open(PATH_CONFIG, "r");
     if (!f) return false;
 
+    IoTConfig candidate = _config;
+    String canonical;
+    uint16_t seen = 0;
+    uint16_t expectedChecksum = 0;
+    bool checksumSeen = false;
+    bool valid = true;
+
     while (f.available()) {
         String line = f.readStringUntil('\n');
         line.trim();
-        int sep = line.indexOf('=');
-        if (sep < 0) continue;
-
-        String key = line.substring(0, sep);
-        String val = line.substring(sep + 1);
-
-        if (key == "name") {
-            val.toCharArray(_config.deviceName, IOT_STORAGE_NAME_MAX);
-        } else if (key == "id") {
-            _config.deviceId = (uint8_t)val.toInt();
-        } else if (key == "central_ip") {
-            _config.centralIP.fromString(val);
-        } else if (key == "udp_port") {
-            _config.udpPort = (uint16_t)val.toInt();
-        } else if (key == "heartbeat_ms") {
-            _config.heartbeatIntervalMs = (uint32_t)val.toInt();
-        } else if (key == "antirebote_ms") {
-            _config.antireboteMs = (uint32_t)val.toInt();
-        } else if (key == "auth_enabled") {
-            _config.authEnabled = (val == "1" || val == "true");
-        } else if (key == "auth_key_len") {
-            _config.authKeyLen = (uint8_t)val.toInt();
-        } else if (key == "config_version") {
-            _config.configVersion = (uint8_t)val.toInt();
+        if (line.length() == 0) {
+            valid = false;
+            break;
         }
+
+        const int sep = line.indexOf('=');
+        if (sep < 0) {
+            valid = false;
+            break;
+        }
+
+        const String key = line.substring(0, sep);
+        const String val = line.substring(sep + 1);
+        if (key == "checksum") {
+            // El checksum debe ser la última línea y no forma parte de sí
+            // mismo; cualquier dato posterior invalida el archivo.
+            if (checksumSeen) {
+                valid = false;
+                break;
+            }
+            expectedChecksum = static_cast<uint16_t>(val.toInt());
+            checksumSeen = true;
+            continue;
+        }
+        if (checksumSeen) {
+            valid = false;
+            break;
+        }
+
+        uint16_t bit = 0;
+        if (key == "name") {
+            bit = 1U << 0;
+            val.toCharArray(candidate.deviceName, IOT_DEVICE_NAME_MAX);
+        } else if (key == "id") {
+            bit = 1U << 1;
+            candidate.deviceId = (uint8_t)val.toInt();
+        } else if (key == "central_ip") {
+            bit = 1U << 2;
+            if (!candidate.centralIP.fromString(val)) valid = false;
+        } else if (key == "udp_port") {
+            bit = 1U << 3;
+            candidate.udpPort = (uint16_t)val.toInt();
+        } else if (key == "heartbeat_ms") {
+            bit = 1U << 4;
+            candidate.heartbeatIntervalMs = (uint32_t)val.toInt();
+        } else if (key == "antirebote_ms") {
+            bit = 1U << 5;
+            candidate.antireboteMs = (uint32_t)val.toInt();
+        } else if (key == "auth_enabled") {
+            bit = 1U << 6;
+            candidate.authEnabled = (val == "1" || val == "true");
+        } else if (key == "auth_key_len") {
+            bit = 1U << 7;
+            candidate.authKeyLen = (uint8_t)val.toInt();
+        } else if (key == "config_version") {
+            bit = 1U << 8;
+            candidate.configVersion = (uint8_t)val.toInt();
+        } else {
+            valid = false;
+            break;
+        }
+
+        if (seen & bit) {
+            valid = false;
+            break;
+        }
+        seen |= bit;
+        canonical += line;
+        canonical += '\n';
+    }
+    f.close();
+
+    const uint16_t required = 0x01FF;
+    if (!valid || !checksumSeen || seen != required) {
+        _setDefaults();
+        return false;
     }
 
-    f.close();
+    const uint16_t actualChecksum = iot_crc16(
+        reinterpret_cast<const uint8_t*>(canonical.c_str()), canonical.length());
+    if (actualChecksum != expectedChecksum) {
+        _setDefaults();
+        return false;
+    }
+
+    _config = candidate;
     return true;
 }
 
 bool IoTStorage::saveConfig() {
     if (!_mounted) return false;
 
-    File f = LittleFS.open(PATH_CONFIG, "w");
+    String content;
+    content += "name=";
+    content += _config.deviceName;
+    content += '\n';
+    content += "id=";
+    content += String(_config.deviceId);
+    content += '\n';
+    content += "central_ip=";
+    content += _config.centralIP.toString();
+    content += '\n';
+    content += "udp_port=";
+    content += String(_config.udpPort);
+    content += '\n';
+    content += "heartbeat_ms=";
+    content += String(_config.heartbeatIntervalMs);
+    content += '\n';
+    content += "antirebote_ms=";
+    content += String(_config.antireboteMs);
+    content += '\n';
+    content += "auth_enabled=";
+    content += String(_config.authEnabled ? 1 : 0);
+    content += '\n';
+    content += "auth_key_len=";
+    content += String(_config.authKeyLen);
+    content += '\n';
+    content += "config_version=";
+    content += String(_config.configVersion);
+    content += '\n';
+
+    const uint16_t checksum = iot_crc16(
+        reinterpret_cast<const uint8_t*>(content.c_str()), content.length());
+
+    // Nunca truncar el archivo final: el contenido completo se prepara en un
+    // temporal y solo después se sustituye con rename() atómico de LittleFS.
+    LittleFS.remove(PATH_CONFIG_TMP);
+    File f = LittleFS.open(PATH_CONFIG_TMP, "w");
     if (!f) return false;
-
-    f.printf("name=%s\n", _config.deviceName);
-    f.printf("id=%d\n", _config.deviceId);
-    f.printf("central_ip=%s\n", _config.centralIP.toString().c_str());
-    f.printf("udp_port=%d\n", _config.udpPort);
-    f.printf("heartbeat_ms=%lu\n", (unsigned long)_config.heartbeatIntervalMs);
-    f.printf("antirebote_ms=%lu\n", (unsigned long)_config.antireboteMs);
-    f.printf("auth_enabled=%d\n", _config.authEnabled ? 1 : 0);
-    f.printf("auth_key_len=%d\n", _config.authKeyLen);
-    f.printf("config_version=%d\n", _config.configVersion);
-
+    f.print(content);
+    f.printf("checksum=%u\n", checksum);
     f.close();
+
+    if (!LittleFS.rename(PATH_CONFIG_TMP, PATH_CONFIG)) {
+        LittleFS.remove(PATH_CONFIG_TMP);
+        return false;
+    }
     return true;
 }
 
@@ -170,8 +307,8 @@ void IoTStorage::resetConfig() {
 }
 
 void IoTStorage::_setDefaults() {
-    memset(&_config, 0, sizeof(_config));
-    strncpy(_config.deviceName, "IoT Device", IOT_STORAGE_NAME_MAX);
+    _config = IoTConfig{};
+    strncpy(_config.deviceName, "IoT Device", IOT_DEVICE_NAME_MAX);
     _config.deviceId = 0x02;
     _config.centralIP = IPAddress(192, 168, 0, 201);
     _config.udpPort = 4210;

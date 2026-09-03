@@ -49,6 +49,12 @@
 #define IOT_MAX_PAYLOAD   64
 #define IOT_MAX_PACKET    (IOT_HEADER_SIZE + IOT_MAX_PAYLOAD + IOT_CRC_SIZE)  // 80 bytes max
 
+// Identidad legible: 23 bytes útiles + terminador NUL.
+#define IOT_DEVICE_NAME_MAX 24
+
+// Alias histórico para consumidores que aún incluyen el nombre anterior.
+#define IOT_STORAGE_NAME_MAX IOT_DEVICE_NAME_MAX
+
 // ============================================================
 // Device IDs (1 byte: 0-255)
 // ============================================================

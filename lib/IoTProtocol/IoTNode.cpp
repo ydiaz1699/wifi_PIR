@@ -13,6 +13,19 @@
 #include <ESP8266WiFi.h>
 #include <string.h>
 
+namespace {
+
+bool addTlvChecked(bool added, const char* context,
+                   const char* tagName) {
+    if (!added) {
+        Serial.printf("[W] %s: TLV %s descartado por falta de payload\n",
+                      context, tagName);
+    }
+    return added;
+}
+
+}  // namespace
+
 // ============================================================
 // Constructor + begin
 // ============================================================
@@ -664,12 +677,18 @@ void IoTNode::_sendHeartbeat() {
     pkt.clearPayload();
 
     // Telemetría enriquecida
-    pkt.addTLV_uint32(TlvTag::UPTIME_SEC, millis() / 1000);
-    pkt.addTLV_int8(TlvTag::RSSI_VAL, (int8_t)WiFi.RSSI());
-    pkt.addTLV_uint32(TlvTag::FREE_HEAP, ESP.getFreeHeap());
-    pkt.addTLV_uint8(TlvTag::QUEUE_DEPTH, _queueCount);
-    pkt.addTLV_uint32(TlvTag::TX_COUNT, _stats.txPackets);
-    pkt.addTLV_uint32(TlvTag::ACK_TIMEOUTS, _stats.ackTimeouts);
+    addTlvChecked(pkt.addTLV_uint32(TlvTag::UPTIME_SEC, millis() / 1000),
+                  "HEARTBEAT", "UPTIME_SEC");
+    addTlvChecked(pkt.addTLV_int8(TlvTag::RSSI_VAL, (int8_t)WiFi.RSSI()),
+                  "HEARTBEAT", "RSSI_VAL");
+    addTlvChecked(pkt.addTLV_uint32(TlvTag::FREE_HEAP, ESP.getFreeHeap()),
+                  "HEARTBEAT", "FREE_HEAP");
+    addTlvChecked(pkt.addTLV_uint8(TlvTag::QUEUE_DEPTH, _queueCount),
+                  "HEARTBEAT", "QUEUE_DEPTH");
+    addTlvChecked(pkt.addTLV_uint32(TlvTag::TX_COUNT, _stats.txPackets),
+                  "HEARTBEAT", "TX_COUNT");
+    addTlvChecked(pkt.addTLV_uint32(TlvTag::ACK_TIMEOUTS, _stats.ackTimeouts),
+                  "HEARTBEAT", "ACK_TIMEOUTS");
 
     sendDirect(pkt, _hbIP, _hbPort);
 }
@@ -689,10 +708,19 @@ void IoTNode::sendHello(IPAddress destIP, uint16_t destPort,
     pkt.seq = getNextSeq();
     pkt.flags = IOT_FLAG_ACK_REQUIRED | IOT_FLAG_RELIABLE;
     pkt.clearPayload();
-    pkt.addTLV_uint8(TlvTag::DEVICE_TYPE_TAG, deviceType);
-    pkt.addTLV_string(TlvTag::DEVICE_NAME, devName);
-    pkt.addTLV_string(TlvTag::FW_VERSION, "4.1.1");
-    pkt.addTLV_uint16(TlvTag::BOOT_ID_TAG, _bootId);
+    uint8_t missing = 0;
+    missing += !addTlvChecked(pkt.addTLV_uint8(TlvTag::DEVICE_TYPE_TAG, deviceType),
+                              "HELLO", "DEVICE_TYPE_TAG");
+    missing += !addTlvChecked(pkt.addTLV_string(TlvTag::DEVICE_NAME, devName),
+                              "HELLO", "DEVICE_NAME");
+    missing += !addTlvChecked(pkt.addTLV_string(TlvTag::FW_VERSION, "4.1.1"),
+                              "HELLO", "FW_VERSION");
+    missing += !addTlvChecked(pkt.addTLV_uint16(TlvTag::BOOT_ID_TAG, _bootId),
+                              "HELLO", "BOOT_ID_TAG");
+    if (missing != 0) {
+        Serial.printf("[W] HELLO: %u TLV(s) faltantes; se conserva el envío parcial\n",
+                      missing);
+    }
 
     enqueue(pkt, destIP, destPort);
 }
@@ -759,9 +787,14 @@ bool IoTNode::sendEvent(uint8_t eventCode, IPAddress destIP, uint16_t destPort, 
     pkt.seq = getNextSeq();
     pkt.flags = IOT_FLAG_ACK_REQUIRED | IOT_FLAG_RELIABLE;
     pkt.clearPayload();
-    pkt.addTLV_uint8(TlvTag::EVENT_TYPE, eventCode);
-    pkt.addTLV_uint8(TlvTag::EVENT_VALUE, 1);
-    pkt.addTLV_int8(TlvTag::RSSI_VAL, (int8_t)WiFi.RSSI());
+    uint8_t missing = 0;
+    missing += !addTlvChecked(pkt.addTLV_uint8(TlvTag::EVENT_TYPE, eventCode),
+                              "EVENT", "EVENT_TYPE");
+    missing += !addTlvChecked(pkt.addTLV_uint8(TlvTag::EVENT_VALUE, 1),
+                              "EVENT", "EVENT_VALUE");
+    missing += !addTlvChecked(pkt.addTLV_int8(TlvTag::RSSI_VAL, (int8_t)WiFi.RSSI()),
+                              "EVENT", "RSSI_VAL");
+    if (missing != 0) return false;
 
     return enqueue(pkt, destIP, destPort);
 }

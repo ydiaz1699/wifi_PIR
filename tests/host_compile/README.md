@@ -2,11 +2,13 @@
 
 Este check usa las fuentes reales de `lib/IoTProtocol` y `lib/AlarmProfile`, pero reemplaza Arduino/ESP8266/WiFiUDP por stubs mínimos en `compat/`.
 
-Valida tres capas:
+Valida:
 
 1. conversiones `AlarmProfile::toWire()` y `toCoreTlvTag()`;
 2. construcción, serialización, deserialización, lectura TLV y rechazo de CRC/paquetes truncados;
-3. compilación/enlace de `IoTNode` y sus llamadas reales a `begin()`, `sendHello()` y `sendEvent()`.
+3. compilación/enlace de `IoTNode`, pruebas de ingreso UDP con inyección/captura host y sus llamadas reales a `begin()`, `sendHello()` y `sendEvent()`;
+4. vector HMAC conocido contra una expectativa independiente (el shim BearSSL de test usa OpenSSL solo en host);
+5. preservación del nombre de dispositivo de 23 caracteres en el registry.
 
 No valida una red WiFi/UDP real ni el comportamiento de un ESP8266 físico.
 
@@ -28,10 +30,48 @@ g++ -std=c++14 -Wall -Wextra \
 /tmp/wifi_pir_host_check
 ```
 
-El resultado esperado es:
+Para el vector HMAC C++ (requiere headers/libs de OpenSSL en el host):
+
+```bash
+g++ -std=c++14 -Wall -Wextra \
+  -Itests/host_compile/compat \
+  -Ilib/IoTProtocol \
+  tests/host_compile/check_auth.cpp \
+  lib/IoTProtocol/IoTProtocol.cpp \
+  lib/IoTProtocol/IoTAuth.cpp \
+  -lcrypto \
+  -o /tmp/wifi_pir_auth_check
+
+/tmp/wifi_pir_auth_check
+```
+
+Los dos resultados esperados son:
 
 ```text
 OK: host compile check wifi_PIR
+OK: HMAC vector check wifi_PIR
+```
+
+El check de storage usa un LittleFS host en memoria para simular truncamiento y
+fallo de escritura sin tocar el filesystem del dispositivo:
+
+```bash
+g++ -std=c++14 -Wall -Wextra \
+  -Itests/storage_host/compat \
+  -Ilib/IoTProtocol \
+  tests/storage_host/storage_check.cpp \
+  tests/storage_host/compat/storage_stub.cpp \
+  lib/IoTProtocol/IoTProtocol.cpp \
+  lib/IoTProtocol/IoTStorage.cpp \
+  -o /tmp/wifi_pir_storage_check
+
+/tmp/wifi_pir_storage_check
+```
+
+Resultado esperado:
+
+```text
+OK: storage hardening check wifi_PIR
 ```
 
 Los warnings sobre `memset` en `IoTNode.cpp` son advertencias del compilador sobre el código existente; no indican que este check haya fallado. Cualquier `FAIL:` o un código de salida distinto de `0` sí indica un problema.

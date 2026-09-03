@@ -118,13 +118,21 @@ void IoTConfigHandler::_sendResponse(const IoTPacket &originalPkt, IPAddress des
     resp.flags = 0;
     resp.clearPayload();
 
-    resp.addTLV_uint8(TlvTag::RESULT_CODE, static_cast<uint8_t>(result));
-    resp.addTLV_uint8(TlvTag::CFG_VERSION, _storage.config().configVersion);
+    if (!resp.addTLV_uint8(TlvTag::RESULT_CODE, static_cast<uint8_t>(result))) {
+        Serial.printf("[W] CONFIG RESPONSE: TLV RESULT_CODE descartado por falta de payload\n");
+        return;
+    }
+    if (!resp.addTLV_uint8(TlvTag::CFG_VERSION, _storage.config().configVersion)) {
+        Serial.printf("[W] CONFIG RESPONSE: TLV CFG_VERSION descartado por falta de payload\n");
+        return;
+    }
 
     // Si hay CMD_ID en el original, incluirlo en la respuesta
     uint32_t cmdId = 0;
-    if (originalPkt.getTLV_uint32(TlvTag::CMD_ID, cmdId)) {
-        resp.addTLV_uint32(TlvTag::RESULT_CMD_ID, cmdId);
+    if (originalPkt.getTLV_uint32(TlvTag::CMD_ID, cmdId) &&
+        !resp.addTLV_uint32(TlvTag::RESULT_CMD_ID, cmdId)) {
+        Serial.printf("[W] CONFIG RESPONSE: TLV RESULT_CMD_ID descartado por falta de payload\n");
+        return;
     }
 
     _node.sendDirect(resp, destIP, destPort);
