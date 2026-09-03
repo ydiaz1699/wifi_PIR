@@ -1,3 +1,4 @@
+// receptor_central_unificado/src/event_handler.cpp
 /**
  * Event Handler V4.3 — Procesamiento genérico de eventos IoTProtocol
  *
