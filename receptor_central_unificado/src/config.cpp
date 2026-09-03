@@ -49,4 +49,7 @@ const unsigned long DURACION_BOCINA_TIMBRE_MS = 500;
 const unsigned long DURACION_BOCINA_PUERTA_MS = 2000;
 const unsigned long MQTT_RECONNECT_INTERVAL_MS = 15000;
 const unsigned long MQTT_SONDEO_INTERVAL_MS = 300000;
+// Tras tres fallos HA, probar de nuevo en 60s; los sondeos LOCAL siguientes
+// conservan el intervalo normal de 5 minutos.
+const unsigned long MQTT_SONDEO_DESPUES_DE_CAIDA_MS = 60000;
 const unsigned long HEARTBEAT_TIMEOUT_MS = 180000;
