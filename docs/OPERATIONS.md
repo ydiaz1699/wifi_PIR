@@ -202,3 +202,70 @@ Correcciones aplicadas en la revisión de integración:
 - OTA permanece pausada para sensores y tráfico de aplicación mientras `otaEnProgreso()` es verdadero. No se fuerza `ESP.restart()` desde `onEnd()` porque el framework ESP8266 controla el reinicio normal; esa ruta debe validarse con hardware y firmware/filesystem OTA.
 
 Pendiente para el gate físico: probar STATE_REQUEST inmediatamente tras arranque, pérdida y recuperación de central, retransmisiones/ACK con pérdida UDP, transición CONFIG/HMAC, OTA durante actividad de sensores y reinicios independientes/simultáneos. Estas pruebas no se consideran verificadas por una compilación.
+
+
+## 7. Configuración LittleFS y migración de esquema
+
+`/iot/config.json` conserva un nombre histórico: su contenido actual **no es JSON**. Es un archivo de líneas `key=value` seguido por `checksum=<CRC16>`. El checksum se calcula sobre las nueve líneas anteriores, incluidos sus saltos de línea, en este orden:
+
+```text
+name
+id
+central_ip
+udp_port
+heartbeat_ms
+antirebote_ms
+auth_enabled
+auth_key_len
+config_version
+```
+
+`loadConfig()` aplica una política estricta: rechaza archivos ausentes, truncados, con líneas vacías, claves desconocidas o duplicadas, claves faltantes, checksum que no sea la última línea o checksum incorrecto; en todos esos casos conserva los defaults en RAM. El esquema actual es V1 (`config_version=1`) y **no existe migración automática**. Antes de agregar, eliminar o renombrar una clave hay que implementar una migración explícita en `IoTStorage.cpp` y añadir su test antes de desplegar el firmware.
+
+Procedimiento recomendado para una actualización de firmware:
+
+1. Respaldar `/iot/config.json`, `/iot/auth.key` y `/iot/boot_count`.
+2. No borrar `boot_count`: resetearlo puede repetir `BOOT_ID` y romper la separación de sesiones.
+3. Si el archivo antiguo no cumple el esquema actual, trasladar manualmente sus valores al formato V1 y regenerarlo mediante `saveConfig()`.
+4. Reiniciar y verificar el `bootId`, el nombre y la configuración efectiva en el log.
+
+`auth.key` es un archivo binario independiente; `auth_key_len` solo describe su longitud y no contiene la clave. Los firmwares actuales siguen construyendo `IoTAuth` con `IOT_AUTH_KEY` de `secrets.h`; para usar `/iot/auth.key` como fuente efectiva habría que cambiar explícitamente ambos entry points y definir qué ocurre cuando falta una clave válida.
+
+## 8. Política de payloads HELLO y EVENT
+
+`IoTNode` mantiene una política deliberadamente asimétrica:
+
+- `HELLO` tolera únicamente la ausencia del metadato opcional `FW_VERSION`. `DEVICE_TYPE_TAG`, `DEVICE_NAME` y `BOOT_ID_TAG` son campos críticos de identidad/sesión; si alguno no cabe, el HELLO se descarta y no se encola.
+- `EVENT` exige `EVENT_TYPE`, `EVENT_VALUE` y `RSSI_VAL`. Si alguno no puede agregarse, `sendEvent()` devuelve `false` y no encola un evento parcial que pudiera activar una acción.
+
+El core trata `deviceType` y `eventCode` como bytes opacos. La validación del vocabulario de alarma pertenece a `AlarmProfile` y al handler de la aplicación, no a `IoTProtocol`.
+
+El ACK automático de `IoTNode` es la confirmación protocolaria del `HELLO`. `HELLO_ACK` es un mensaje de aplicación distinto; la central actual no lo genera, por lo que el registro debe depender del ACK protocolario y no de la expectativa de un `HELLO_ACK` adicional.
+
+## 9. Checks de hardening host
+
+Además del test Unity del codec, la cobertura del hardening se ejecuta manualmente desde la raíz:
+
+```bash
+g++ -std=c++14 -Wall -Wextra -Werror \
+  -Itests/host_compile/compat -Ilib/IoTProtocol -Ilib/AlarmProfile \
+  tests/host_compile/check.cpp tests/host_compile/compat/arduino_stub.cpp \
+  lib/IoTProtocol/IoTProtocol.cpp lib/IoTProtocol/IoTNode.cpp \
+  -o /tmp/wifi_pir_host_check && /tmp/wifi_pir_host_check
+
+# HMAC: requiere OpenSSL del host
+g++ -std=c++14 -Wall -Wextra -Werror \
+  -Itests/host_compile/compat -Ilib/IoTProtocol \
+  tests/host_compile/check_auth.cpp lib/IoTProtocol/IoTProtocol.cpp \
+  lib/IoTProtocol/IoTAuth.cpp -lcrypto \
+  -o /tmp/wifi_pir_auth_check && /tmp/wifi_pir_auth_check
+
+# Storage: LittleFS en memoria, incluye truncamiento y fallo de escritura
+g++ -std=c++14 -Wall -Wextra -Werror \
+  -Itests/storage_host/compat -Ilib/IoTProtocol \
+  tests/storage_host/storage_check.cpp tests/storage_host/compat/storage_stub.cpp \
+  lib/IoTProtocol/IoTProtocol.cpp lib/IoTProtocol/IoTStorage.cpp \
+  -o /tmp/wifi_pir_storage_check && /tmp/wifi_pir_storage_check
+```
+
+Estos checks cubren el vector HMAC y las cuatro ramas del canal `sessionChanged`: ACK normal, bootstrap, reinicio remoto con reliable en vuelo y rechazo de ACK de sesión vieja. No sustituyen la validación física del ESP8266, WiFi, MQTT o LittleFS real.

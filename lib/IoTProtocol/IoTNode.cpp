@@ -1,5 +1,5 @@
 /**
- * IoTNode V4.1.1 — Implementación con hardening
+ * IoTNode V4.3 — Implementación con hardening
  *
  * Fixes vs V4.1:
  * - Dedup Window: ventana circular de últimos 8 SEQ por dispositivo
@@ -708,18 +708,29 @@ void IoTNode::sendHello(IPAddress destIP, uint16_t destPort,
     pkt.seq = getNextSeq();
     pkt.flags = IOT_FLAG_ACK_REQUIRED | IOT_FLAG_RELIABLE;
     pkt.clearPayload();
+
+    // HELLO policy: DEVICE_TYPE_TAG, DEVICE_NAME and BOOT_ID_TAG are the
+    // identity fields required for a useful discovery record. If one does
+    // not fit, do not enqueue a misleading partial HELLO. FW_VERSION is
+    // optional metadata: its absence is logged, but discovery can proceed.
+    const bool hasDeviceType = pkt.addTLV_uint8(TlvTag::DEVICE_TYPE_TAG, deviceType);
+    const bool hasDeviceName = pkt.addTLV_string(TlvTag::DEVICE_NAME, devName);
+    const bool hasFwVersion = pkt.addTLV_string(TlvTag::FW_VERSION, "4.3.0");
+    const bool hasBootId = pkt.addTLV_uint16(TlvTag::BOOT_ID_TAG, _bootId);
     uint8_t missing = 0;
-    missing += !addTlvChecked(pkt.addTLV_uint8(TlvTag::DEVICE_TYPE_TAG, deviceType),
-                              "HELLO", "DEVICE_TYPE_TAG");
-    missing += !addTlvChecked(pkt.addTLV_string(TlvTag::DEVICE_NAME, devName),
-                              "HELLO", "DEVICE_NAME");
-    missing += !addTlvChecked(pkt.addTLV_string(TlvTag::FW_VERSION, "4.1.1"),
-                              "HELLO", "FW_VERSION");
-    missing += !addTlvChecked(pkt.addTLV_uint16(TlvTag::BOOT_ID_TAG, _bootId),
-                              "HELLO", "BOOT_ID_TAG");
+    missing += !hasDeviceType;
+    missing += !hasDeviceName;
+    missing += !hasFwVersion;
+    missing += !hasBootId;
     if (missing != 0) {
-        Serial.printf("[W] HELLO: %u TLV(s) faltantes; se conserva el envío parcial\n",
-                      missing);
+        Serial.printf("[W] HELLO: %u TLV(s) faltantes\n", missing);
+    }
+    if (!hasDeviceType || !hasDeviceName || !hasBootId) {
+        // A discovery packet without identity/session data cannot be safely
+        // registered. Unlike EVENT, HELLO may tolerate only missing optional
+        // metadata, not missing critical identity fields.
+        Serial.printf("[W] HELLO descartado: falta un TLV crítico\n");
+        return;
     }
 
     enqueue(pkt, destIP, destPort);
@@ -787,6 +798,10 @@ bool IoTNode::sendEvent(uint8_t eventCode, IPAddress destIP, uint16_t destPort, 
     pkt.seq = getNextSeq();
     pkt.flags = IOT_FLAG_ACK_REQUIRED | IOT_FLAG_RELIABLE;
     pkt.clearPayload();
+
+    // EVENT policy: EVENT_TYPE, EVENT_VALUE and RSSI are built as one
+    // reliable application record. A partial event could trigger an action
+    // without complete telemetry, so any missing TLV aborts the enqueue.
     uint8_t missing = 0;
     missing += !addTlvChecked(pkt.addTLV_uint8(TlvTag::EVENT_TYPE, eventCode),
                               "EVENT", "EVENT_TYPE");

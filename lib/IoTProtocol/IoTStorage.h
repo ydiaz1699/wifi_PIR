@@ -11,6 +11,15 @@
  *   /iot/config.json   — configuración key=value + checksum CRC16
  *   /iot/auth.key      — clave HMAC (binario, 16-32 bytes)
  *
+ * Compatibilidad de esquema:
+ *   config.json mantiene un nombre histórico, pero su contenido actual es
+ *   key=value con CRC16. El esquema V1 exige las nueve claves conocidas y
+ *   no migra automáticamente archivos antiguos o futuros. Un cambio de
+ *   esquema requiere una rutina de migración explícita antes del despliegue.
+ *   auth.key es independiente de auth_key_len; las aplicaciones actuales
+ *   usan IOT_AUTH_KEY desde secrets.h, salvo que se cambie explícitamente
+ *   el firmware para cargar la clave persistente.
+ *
  * Uso:
  *   IoTStorage storage;
  *   storage.begin();
@@ -53,6 +62,9 @@ struct IoTConfig {
     bool     authEnabled;
 
     // Versión de config (para detectar cambios)
+    // La versión actual es 1. loadConfig() exige el esquema completo y no
+    // migra versiones automáticamente: cualquier cambio de claves requiere
+    // una rutina de migración explícita antes de desplegar el firmware.
     uint8_t  configVersion;
 };
 

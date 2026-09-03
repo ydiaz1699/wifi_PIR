@@ -141,6 +141,10 @@ bool IoTStorage::_writeBootCount() {
 
 bool IoTStorage::loadConfig() {
     _setDefaults();
+    // Esquema V1 estricto: se valida el archivo completo antes de copiar
+    // `candidate` a `_config`. No existe migración automática por
+    // configVersion; agregar/quitar claves requiere implementarla aquí y
+    // probarla antes de desplegar una nueva versión.
     if (!_mounted || !LittleFS.exists(PATH_CONFIG)) {
         return false;
     }
