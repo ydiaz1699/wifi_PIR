@@ -48,6 +48,7 @@ public:
     void info(FSInfo& info) const;
 
     bool failWrites = false;
+    int failBegins = 0;
 
 public:
     std::map<std::string, std::string> files_;
@@ -61,4 +62,5 @@ void reset();
 void truncate(const char* path, std::size_t length);
 std::size_t size(const char* path);
 void setFailWrites(bool fail);
+void setFailBegins(int count);
 }

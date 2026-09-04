@@ -21,6 +21,16 @@
 #include "device_config.h"
 #include "logger.h"
 #include "ota.h"
+#include <cstring>
+
+// Versión del firmware de aplicación; no la define el core reutilizable.
+static const char FW_VERSION[] = "4.3.0";
+static const unsigned long HEALTH_LOG_INTERVAL_MS = 30000;
+static const unsigned long STORAGE_RETRY_INTERVAL_MS = 300000;
+static unsigned long lastHealthLog = 0;
+static unsigned long nextStorageRetry = 0;
+static uint32_t minimumFreeHeap = 0xFFFFFFFFUL;
+static BootReason bootReason = BootReason::UNKNOWN;
 
 // --- Shared secret para HMAC (desde secrets.h, NO versionado) ---
 static const uint8_t AUTH_KEY[] = IOT_AUTH_KEY;
@@ -72,21 +82,59 @@ static void iniciarWiFi() {
     LOG_INFO("WiFi conectando...");
 }
 
-static void manejarWiFi() {
-    if (WiFi.status() == WL_CONNECTED) {
-        if (wifiConectando) {
-            wifiConectando = false;
-            LOG_INFO("WiFi OK: %s", WiFi.localIP().toString().c_str());
-            setupOTA();
-        }
-        return;
+static const char* bootReasonToString(BootReason reason) {
+    switch (reason) {
+        case BootReason::POWER_ON:       return "POWER_ON";
+        case BootReason::SOFTWARE_RESET: return "SOFTWARE_RESET";
+        case BootReason::WATCHDOG:       return "WATCHDOG";
+        case BootReason::DEEP_SLEEP:     return "DEEP_SLEEP";
+        case BootReason::OTA_UPDATE:     return "OTA_UPDATE";
+        case BootReason::CRASH:          return "CRASH";
+        default:                         return "UNKNOWN";
     }
-    unsigned long ahora = millis();
-    if (!wifiConectando) {
-        iniciarWiFi();
-    } else if (ahora - ultimoIntentoWiFi > 5000) {
-        LOG_WARN("WiFi reintentando...");
-        iniciarWiFi();
+}
+
+static BootReason detectBootReason() {
+    const String resetInfo = ESP.getResetReason();
+    const char* text = resetInfo.c_str();
+    if (std::strstr(text, "wdt") || std::strstr(text, "WDT") ||
+        std::strstr(text, "Watchdog")) return BootReason::WATCHDOG;
+    if (std::strstr(text, "Exception") || std::strstr(text, "Fatal")) {
+        return BootReason::CRASH;
+    }
+    if (std::strstr(text, "Deep-Sleep") || std::strstr(text, "Deep Sleep")) {
+        return BootReason::DEEP_SLEEP;
+    }
+    if (std::strstr(text, "Power")) return BootReason::POWER_ON;
+    if (std::strstr(text, "Software") || std::strstr(text, "restart")) {
+        return BootReason::SOFTWARE_RESET;
+    }
+    return BootReason::UNKNOWN;
+}
+
+static void monitorRuntimeHealth() {
+    const uint32_t freeHeap = ESP.getFreeHeap();
+    if (freeHeap < minimumFreeHeap) minimumFreeHeap = freeHeap;
+    const unsigned long now = millis();
+    if (now - lastHealthLog >= HEALTH_LOG_INTERVAL_MS) {
+        lastHealthLog = now;
+        LOG_INFO("Health: heap=%lu min=%lu storage=%s",
+                 (unsigned long)freeHeap,
+                 (unsigned long)minimumFreeHeap,
+                 storage.isMounted() ? "mounted" : "degraded");
+    }
+}
+
+static void retryStorageIfNeeded() {
+    if (storage.isMounted()) return;
+    const unsigned long now = millis();
+    if (static_cast<long>(now - nextStorageRetry) < 0) return;
+    nextStorageRetry = now + STORAGE_RETRY_INTERVAL_MS;
+    if (storage.retryMount()) {
+        LOG_WARN("Storage recuperado; BOOT_ID de este arranque sigue degradado");
+    } else {
+        LOG_WARN("Storage sigue degradado; proximo reintento en %lums",
+                 STORAGE_RETRY_INTERVAL_MS);
     }
 }
 
@@ -147,6 +195,15 @@ static void sendStateReport(IPAddress destIP, uint16_t destPort) {
         LOG_WARN("STATE_REPORT: TLV ACK_TIMEOUTS no pudo agregarse");
         complete = false;
     }
+    if (!pkt.addTLV_string(TlvTag::FW_VERSION, FW_VERSION)) {
+        LOG_WARN("STATE_REPORT: TLV FW_VERSION no pudo agregarse");
+        complete = false;
+    }
+    if (!pkt.addTLV_uint8(TlvTag::BOOT_REASON,
+                          static_cast<uint8_t>(bootReason))) {
+        LOG_WARN("STATE_REPORT: TLV BOOT_REASON no pudo agregarse");
+        complete = false;
+    }
     if (!complete) {
         LOG_ERROR("STATE_REPORT no enviado: payload incompleto");
         return;
@@ -201,6 +258,11 @@ void setup() {
     delay(100);
     LOG_INFO("===== Emisor IoT V4.3 [%s] ID=0x%02X =====", MY_DEVICE_NAME, MY_DEVICE_ID);
 
+    bootReason = detectBootReason();
+    LOG_INFO("Reset reason: %s (%s), FW=%s",
+             bootReasonToString(bootReason), ESP.getResetReason().c_str(),
+             FW_VERSION);
+
     ESP.wdtEnable(8000);
     pinMode(PIN_PIR, INPUT);
     pinMode(PIN_TIMBRE, INPUT_PULLUP);
@@ -217,7 +279,8 @@ void setup() {
             LOG_WARN("Config ausente o inválida: usando defaults");
         }
     } else {
-        LOG_ERROR("Storage FAIL: usando defaults");
+        nextStorageRetry = millis() + STORAGE_RETRY_INTERVAL_MS;
+        LOG_ERROR("Storage FAIL: usando defaults; montaje no destructivo");
     }
 
     // Consumir y persistir el BOOT_ID exactamente una vez por arranque.
@@ -254,6 +317,8 @@ void setup() {
     // node.loop() durante setup, pero el orden deja lista la frontera antes
     // de cualquier recepción normal.
     node.begin(bootId);
+    node.setFirmwareVersion(FW_VERSION);
+    node.setBootReason(bootReason);
     auth.setRequired(storage.config().authEnabled);
     configureAuthProvider(storage.config().authEnabled);
 
@@ -283,6 +348,8 @@ void setup() {
 
 void loop() {
     ESP.wdtFeed();
+    monitorRuntimeHealth();
+    retryStorageIfNeeded();
     manejarWiFi();
     handleOTA();
 

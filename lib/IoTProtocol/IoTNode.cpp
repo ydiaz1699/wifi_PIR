@@ -34,7 +34,8 @@ IoTNode::IoTNode(uint8_t deviceId, uint16_t udpPort)
     : _deviceId(deviceId), _udpPort(udpPort), _bootId(0), _seq(0),
       _queueCount(0), _overflowPolicy(QueueOverflow::DROP_OLDEST_BG),
       _hbEnabled(false), _hbInterval(IOT_HEARTBEAT_INTERVAL),
-      _lastHb(0), _lastStateCheck(0), _handler(nullptr)
+      _lastHb(0), _lastStateCheck(0), _handler(nullptr),
+      _firmwareVersion(nullptr), _bootReason(BootReason::UNKNOWN)
 {
     memset(_queue, 0, sizeof(_queue));
     memset(_remotes, 0, sizeof(_remotes));
@@ -689,6 +690,13 @@ void IoTNode::_sendHeartbeat() {
                   "HEARTBEAT", "TX_COUNT");
     addTlvChecked(pkt.addTLV_uint32(TlvTag::ACK_TIMEOUTS, _stats.ackTimeouts),
                   "HEARTBEAT", "ACK_TIMEOUTS");
+    if (_firmwareVersion && _firmwareVersion[0] != '\0') {
+        addTlvChecked(pkt.addTLV_string(TlvTag::FW_VERSION, _firmwareVersion),
+                      "HEARTBEAT", "FW_VERSION");
+    }
+    addTlvChecked(pkt.addTLV_uint8(TlvTag::BOOT_REASON,
+                                   static_cast<uint8_t>(_bootReason)),
+                  "HEARTBEAT", "BOOT_REASON");
 
     sendDirect(pkt, _hbIP, _hbPort);
 }
@@ -715,15 +723,24 @@ void IoTNode::sendHello(IPAddress destIP, uint16_t destPort,
     // optional metadata: its absence is logged, but discovery can proceed.
     const bool hasDeviceType = pkt.addTLV_uint8(TlvTag::DEVICE_TYPE_TAG, deviceType);
     const bool hasDeviceName = pkt.addTLV_string(TlvTag::DEVICE_NAME, devName);
-    const bool hasFwVersion = pkt.addTLV_string(TlvTag::FW_VERSION, "4.3.0");
+    const bool hasFwVersion =
+        _firmwareVersion && _firmwareVersion[0] != '\0' &&
+        pkt.addTLV_string(TlvTag::FW_VERSION, _firmwareVersion);
+    const bool hasBootReason = pkt.addTLV_uint8(
+        TlvTag::BOOT_REASON, static_cast<uint8_t>(_bootReason));
     const bool hasBootId = pkt.addTLV_uint16(TlvTag::BOOT_ID_TAG, _bootId);
-    uint8_t missing = 0;
-    missing += !hasDeviceType;
-    missing += !hasDeviceName;
-    missing += !hasFwVersion;
-    missing += !hasBootId;
-    if (missing != 0) {
-        Serial.printf("[W] HELLO: %u TLV(s) faltantes\n", missing);
+    uint8_t missingCritical = 0;
+    missingCritical += !hasDeviceType;
+    missingCritical += !hasDeviceName;
+    missingCritical += !hasBootId;
+    if (!hasFwVersion) {
+        Serial.printf("[W] HELLO: TLV FW_VERSION opcional ausente\n");
+    }
+    if (!hasBootReason) {
+        Serial.printf("[W] HELLO: TLV BOOT_REASON opcional descartado por falta de payload\n");
+    }
+    if (missingCritical != 0) {
+        Serial.printf("[W] HELLO: %u TLV(s) críticos faltantes\n", missingCritical);
     }
     if (!hasDeviceType || !hasDeviceName || !hasBootId) {
         // A discovery packet without identity/session data cannot be safely
@@ -733,12 +750,22 @@ void IoTNode::sendHello(IPAddress destIP, uint16_t destPort,
         return;
     }
 
-    enqueue(pkt, destIP, destPort);
+    const bool queued = enqueue(pkt, destIP, destPort);
+    if (!queued) {
+        Serial.printf("[W] HELLO no encolado: cola llena o proveedor de auth fallo\n");
+    } else if (WiFi.status() != WL_CONNECTED) {
+        Serial.printf("[I] HELLO encolado sin WiFi: se enviara al reconectar (q=%u)\n",
+                      static_cast<unsigned>(queuedCount()));
+    }
 }
 
-// ============================================================
-// Callback + sendEvent
-// ============================================================
+void IoTNode::setFirmwareVersion(const char* version) {
+    _firmwareVersion = version;
+}
+
+void IoTNode::setBootReason(BootReason reason) {
+    _bootReason = reason;
+}
 
 void IoTNode::onPacketReceived(IoTPacketHandler handler) {
     _handler = handler;

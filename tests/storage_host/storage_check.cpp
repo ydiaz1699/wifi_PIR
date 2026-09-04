@@ -52,11 +52,41 @@ bool check_boot_id_degraded_state() {
                   "fallo de escritura no activó BOOT_ID degradado");
 }
 
+bool check_mount_failure_is_non_destructive() {
+    HostLittleFS::reset();
+    IoTStorage healthy;
+    if (!expect(healthy.begin(), "LittleFS host stub no montó para mount failure")) return false;
+    std::strcpy(healthy.config().deviceName, "preserved");
+    if (!expect(healthy.saveConfig(), "no se pudo preparar config para mount failure")) return false;
+    const std::size_t before = HostLittleFS::size("/iot/config.json");
+
+    HostLittleFS::setFailBegins(2);
+    IoTStorage degraded;
+    if (!expect(!degraded.begin(), "fallo de montaje simulado fue ocultado")) return false;
+    if (!expect(!degraded.isMounted(), "storage degradado quedó marcado como montado")) return false;
+    if (!expect(HostLittleFS::size("/iot/config.json") == before,
+                "fallo de montaje alteró la configuración existente")) return false;
+    const uint16_t fallback = degraded.getBootId();
+    if (!expect(fallback != 0 && !degraded.isBootIdPersistent(),
+                "fallo de montaje no produjo BOOT_ID degradado")) return false;
+
+    HostLittleFS::setFailBegins(0);
+    if (!expect(degraded.retryMount(), "retryMount no recuperó LittleFS")) return false;
+    if (!expect(degraded.isMounted(), "retryMount no marcó LittleFS como montado")) return false;
+    if (!expect(!degraded.isBootIdPersistent(),
+                "retryMount reactivó persistencia después de consumir fallback")) return false;
+    return expect(degraded.loadConfig() &&
+                      std::strcmp(degraded.config().deviceName, "preserved") == 0,
+                  "configuración preservada no pudo recargarse tras retryMount");
+}
+
+
 }  // namespace
 
 int main() {
     if (!check_atomic_config_and_checksum()) return 1;
     if (!check_boot_id_degraded_state()) return 2;
+    if (!check_mount_failure_is_non_destructive()) return 3;
     std::puts("OK: storage hardening check wifi_PIR");
     return 0;
 }

@@ -41,6 +41,7 @@ Sistema modular de alarma y sensores IoT usando ESP8266 con protocolo propio sob
 | [**BUGS_FIXED.md**](docs/BUGS_FIXED.md) | Bugs históricos con estados de evidencia, causas y reglas preventivas |
 | [**PLAN_EJECUCION_FUTURA.md**](docs/PLAN_EJECUCION_FUTURA.md) | Estado técnico y orden seguro para continuar el desarrollo |
 | [**OPERATIONS.md**](docs/OPERATIONS.md) | Compile check host, tests, patch, MQTT/HA, OTA y validación de red |
+| [**AUDITORIA_MQTT.md**](docs/AUDITORIA_MQTT.md) | Auditoría de robustez MQTT V4.3, evidencia, riesgos y plan de pruebas |
 
 ## Quick Start
 

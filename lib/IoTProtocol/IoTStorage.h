@@ -30,8 +30,9 @@
  *   storage.setCentralIP(IPAddress(192,168,0,201));
  *   storage.save();
  *
- * Nota: LittleFS debe formatearse una vez en primera instalación.
- * begin() hace format automático si no puede montar.
+ * Nota: LittleFS debe formatearse explícitamente una vez en primera
+ * instalación. begin() reintenta el montaje sin formatear ni borrar datos;
+ * format() solo se ejecuta por una operación explícita.
  */
 
 #pragma once
@@ -73,10 +74,19 @@ public:
     IoTStorage();
 
     /**
-     * Inicializar LittleFS. Si no puede montar, formatea.
+     * Inicializar LittleFS. Reintenta el montaje sin formatear.
      * @return true si montó correctamente
      */
     bool begin();
+
+    /**
+     * Reintenta montar LittleFS después de un fallo transitorio.
+     * No cambia el BOOT_ID ya consumido ni recarga configuración en runtime.
+     */
+    bool retryMount();
+
+    /** Indica si LittleFS está montado en este momento. */
+    bool isMounted() const { return _mounted; }
 
     /**
      * Obtiene el BOOT_ID actual (incrementa el counter y persiste).
@@ -153,7 +163,10 @@ private:
     bool _mounted;
     bool _bootCounterValid;
     bool _bootIdPersistent;
+    bool _bootIdConsumed;
+    uint8_t _mountAttempts;
 
+    bool _mountLittleFS();
     bool _readBootCount();
     bool _writeBootCount();
     uint16_t _volatileBootId() const;
