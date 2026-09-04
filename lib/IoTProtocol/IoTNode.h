@@ -236,6 +236,12 @@ public:
     void sendHello(IPAddress destIP, uint16_t destPort, uint8_t deviceType,
                    const char* devName);
 
+    // --- Diagnóstico opcional de aplicación ---
+    // Los TLV de versión y reset se omiten si no se configuran, preservando
+    // callers legacy y permitiendo que el core siga siendo reutilizable.
+    void setFirmwareVersion(const char* version);
+    void setBootReason(BootReason reason);
+
     // --- Callback ---
     void onPacketReceived(IoTPacketHandler handler);
 
@@ -306,6 +312,10 @@ private:
 
     // Proveedor de autenticación (DISABLED por defecto para compatibilidad)
     IoTAuthProvider _authProvider;
+
+    // Diagnóstico opcional aportado por el firmware de aplicación.
+    const char* _firmwareVersion;
+    BootReason _bootReason;
 
     // Buffer de recepción
     uint8_t _rxBuf[IOT_MAX_PACKET];

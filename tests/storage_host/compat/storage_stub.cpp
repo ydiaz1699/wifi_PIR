@@ -146,7 +146,13 @@ void File::close() {
     valid_ = false;
 }
 
-bool LittleFSClass::begin() { return true; }
+bool LittleFSClass::begin() {
+    if (failBegins > 0) {
+        --failBegins;
+        return false;
+    }
+    return true;
+}
 
 bool LittleFSClass::format() {
     files_.clear();
@@ -192,6 +198,7 @@ namespace HostLittleFS {
 void reset() {
     LittleFS.format();
     LittleFS.failWrites = false;
+    LittleFS.failBegins = 0;
 }
 
 void truncate(const char* path, std::size_t length) {
@@ -206,6 +213,10 @@ std::size_t size(const char* path) {
 
 void setFailWrites(bool fail) {
     LittleFS.failWrites = fail;
+}
+
+void setFailBegins(int count) {
+    LittleFS.failBegins = count;
 }
 
 }  // namespace HostLittleFS

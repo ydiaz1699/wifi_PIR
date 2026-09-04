@@ -231,6 +231,8 @@ Procedimiento recomendado para una actualización de firmware:
 
 `auth.key` es un archivo binario independiente; `auth_key_len` solo describe su longitud y no contiene la clave. Los firmwares actuales siguen construyendo `IoTAuth` con `IOT_AUTH_KEY` de `secrets.h`; para usar `/iot/auth.key` como fuente efectiva habría que cambiar explícitamente ambos entry points y definir qué ocurre cuando falta una clave válida.
 
+`IoTStorage::begin()` intenta montar LittleFS dos veces y no ejecuta `format()` automáticamente. Si ambos intentos fallan, el firmware continúa en modo degradado con un `BOOT_ID` volátil y reintenta el montaje cada cinco minutos sin cambiar el `BOOT_ID` ya consumido. El formateo debe ser una operación explícita de mantenimiento; no se debe interpretar un fallo transitorio como autorización para borrar la configuración.
+
 ## 8. Política de payloads HELLO y EVENT
 
 `IoTNode` mantiene una política deliberadamente asimétrica:
@@ -260,7 +262,7 @@ g++ -std=c++14 -Wall -Wextra -Werror \
   lib/IoTProtocol/IoTAuth.cpp -lcrypto \
   -o /tmp/wifi_pir_auth_check && /tmp/wifi_pir_auth_check
 
-# Storage: LittleFS en memoria, incluye truncamiento y fallo de escritura
+# Storage: LittleFS en memoria, incluye truncamiento, fallo de escritura y fallo de montaje
 g++ -std=c++14 -Wall -Wextra -Werror \
   -Itests/storage_host/compat -Ilib/IoTProtocol \
   tests/storage_host/storage_check.cpp tests/storage_host/compat/storage_stub.cpp \
@@ -268,4 +270,4 @@ g++ -std=c++14 -Wall -Wextra -Werror \
   -o /tmp/wifi_pir_storage_check && /tmp/wifi_pir_storage_check
 ```
 
-Estos checks cubren el vector HMAC y las cuatro ramas del canal `sessionChanged`: ACK normal, bootstrap, reinicio remoto con reliable en vuelo y rechazo de ACK de sesión vieja. No sustituyen la validación física del ESP8266, WiFi, MQTT o LittleFS real.
+Estos checks cubren el vector HMAC, las cuatro ramas del canal `sessionChanged` (ACK normal, bootstrap, reinicio remoto con reliable en vuelo y rechazo de ACK de sesión vieja), deduplicación C++ real con wraparound de `SEQ`, TLV diagnóstico de HELLO y fallo/reintento no destructivo de montaje LittleFS. No sustituyen la validación física del ESP8266, WiFi, MQTT o LittleFS real.

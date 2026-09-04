@@ -142,13 +142,18 @@ static void publishHeartbeat(uint8_t srcId, const IoTPacket &pkt) {
     uint8_t queueDepth = 0;
     uint32_t txCount = 0;
     uint32_t ackTimeouts = 0;
+    char fwVersion[12] = "";
+    uint8_t bootReason = static_cast<uint8_t>(BootReason::UNKNOWN);
 
     pkt.getTLV_uint32(TlvTag::UPTIME_SEC, uptime);
     pkt.getTLV_int8(TlvTag::RSSI_VAL, rssi);
-    pkt.getTLV_uint32(TlvTag::FREE_HEAP, freeHeap);
-    pkt.getTLV_uint8(TlvTag::QUEUE_DEPTH, queueDepth);
-    pkt.getTLV_uint32(TlvTag::TX_COUNT, txCount);
-    pkt.getTLV_uint32(TlvTag::ACK_TIMEOUTS, ackTimeouts);
+    const bool hasFreeHeap = pkt.getTLV_uint32(TlvTag::FREE_HEAP, freeHeap);
+    const bool hasQueueDepth = pkt.getTLV_uint8(TlvTag::QUEUE_DEPTH, queueDepth);
+    const bool hasTxCount = pkt.getTLV_uint32(TlvTag::TX_COUNT, txCount);
+    const bool hasAckTimeouts = pkt.getTLV_uint32(TlvTag::ACK_TIMEOUTS, ackTimeouts);
+    const bool hasFwVersion = pkt.getTLV_string(TlvTag::FW_VERSION, fwVersion,
+                                                 sizeof(fwVersion));
+    const bool hasBootReason = pkt.getTLV_uint8(TlvTag::BOOT_REASON, bootReason);
 
     snprintf(topic, sizeof(topic), "casa/iot/device_%02X/uptime", srcId);
     snprintf(payload, sizeof(payload), "%lu", (unsigned long)uptime);
@@ -158,21 +163,38 @@ static void publishHeartbeat(uint8_t srcId, const IoTPacket &pkt) {
     snprintf(payload, sizeof(payload), "%d", rssi);
     mqtt.publish(topic, payload, true);
 
-    if (freeHeap > 0) {
+    if (hasFreeHeap) {
         snprintf(topic, sizeof(topic), "casa/iot/device_%02X/heap", srcId);
         snprintf(payload, sizeof(payload), "%lu", (unsigned long)freeHeap);
         mqtt.publish(topic, payload, true);
     }
 
-    if (txCount > 0) {
+    if (hasTxCount) {
         snprintf(topic, sizeof(topic), "casa/iot/device_%02X/tx_count", srcId);
         snprintf(payload, sizeof(payload), "%lu", (unsigned long)txCount);
         mqtt.publish(topic, payload, true);
     }
 
-    if (ackTimeouts > 0) {
+    if (hasAckTimeouts) {
         snprintf(topic, sizeof(topic), "casa/iot/device_%02X/ack_timeouts", srcId);
         snprintf(payload, sizeof(payload), "%lu", (unsigned long)ackTimeouts);
+        mqtt.publish(topic, payload, true);
+    }
+
+    if (hasQueueDepth) {
+        snprintf(topic, sizeof(topic), "casa/iot/device_%02X/queue_depth", srcId);
+        snprintf(payload, sizeof(payload), "%u", static_cast<unsigned>(queueDepth));
+        mqtt.publish(topic, payload, true);
+    }
+
+    if (hasFwVersion) {
+        snprintf(topic, sizeof(topic), "casa/iot/device_%02X/fw_version", srcId);
+        mqtt.publish(topic, fwVersion, true);
+    }
+
+    if (hasBootReason) {
+        snprintf(topic, sizeof(topic), "casa/iot/device_%02X/boot_reason", srcId);
+        snprintf(payload, sizeof(payload), "%u", static_cast<unsigned>(bootReason));
         mqtt.publish(topic, payload, true);
     }
 }
@@ -273,12 +295,21 @@ void handleIoTPacket(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePo
 
         case MsgType::HELLO: {
             char name[IOT_DEVICE_NAME_MAX] = "";
+            char fwVersion[12] = "";
             uint8_t devType = 0;
+            uint8_t bootReason = static_cast<uint8_t>(BootReason::UNKNOWN);
+            const bool hasFwVersion = pkt.getTLV_string(TlvTag::FW_VERSION,
+                                                        fwVersion,
+                                                        sizeof(fwVersion));
+            const bool hasBootReason = pkt.getTLV_uint8(TlvTag::BOOT_REASON,
+                                                        bootReason);
             pkt.getTLV_string(TlvTag::DEVICE_NAME, name, sizeof(name));
             pkt.getTLV_uint8(TlvTag::DEVICE_TYPE_TAG, devType);
-            LOG_INFO("HELLO 0x%02X: \"%s\" type=%d boot=0x%04X (%s)",
+            LOG_INFO("HELLO 0x%02X: \"%s\" type=%d boot=0x%04X (%s) fw=%s reset=%u",
                      pkt.src, name, devType, pkt.bootId,
-                     remoteIP.toString().c_str());
+                     remoteIP.toString().c_str(),
+                     hasFwVersion ? fwVersion : "unknown",
+                     hasBootReason ? static_cast<unsigned>(bootReason) : 255U);
 
             // Publicar discovery en MQTT
             if (mqttDisponible) {
@@ -287,6 +318,17 @@ void handleIoTPacket(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePo
                 mqtt.publish(topic, name, true);
                 snprintf(topic, sizeof(topic), "casa/iot/device_%02X/status", pkt.src);
                 mqtt.publish(topic, "online", true);
+                if (hasFwVersion) {
+                    snprintf(topic, sizeof(topic), "casa/iot/device_%02X/fw_version", pkt.src);
+                    mqtt.publish(topic, fwVersion, true);
+                }
+                if (hasBootReason) {
+                    snprintf(topic, sizeof(topic), "casa/iot/device_%02X/boot_reason", pkt.src);
+                    char payload[8];
+                    snprintf(payload, sizeof(payload), "%u",
+                             static_cast<unsigned>(bootReason));
+                    mqtt.publish(topic, payload, true);
+                }
             }
             break;
         }

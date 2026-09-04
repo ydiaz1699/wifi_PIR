@@ -17,6 +17,7 @@ static const char* PATH_BOOT_COUNT = "/iot/boot_count";
 static const char* PATH_CONFIG     = "/iot/config.json";
 static const char* PATH_CONFIG_TMP = "/iot/config.json.tmp";
 static const char* PATH_AUTH_KEY   = "/iot/auth.key";
+static const uint8_t STORAGE_MOUNT_ATTEMPTS = 2;
 
 // ============================================================
 // Constructor
@@ -24,7 +25,7 @@ static const char* PATH_AUTH_KEY   = "/iot/auth.key";
 
 IoTStorage::IoTStorage()
     : _bootCount(0), _mounted(false), _bootCounterValid(false),
-      _bootIdPersistent(false)
+      _bootIdPersistent(false), _bootIdConsumed(false), _mountAttempts(0)
 {
     _setDefaults();
 }
@@ -33,33 +34,50 @@ IoTStorage::IoTStorage()
 // Inicialización
 // ============================================================
 
-bool IoTStorage::begin() {
-    if (!LittleFS.begin()) {
-        // Primer uso: formatear
-        LittleFS.format();
-        if (!LittleFS.begin()) {
-            _mounted = false;
-            _bootCounterValid = false;
-            _bootIdPersistent = false;
-            return false;
-        }
-    }
-    _mounted = true;
+bool IoTStorage::_mountLittleFS() {
+    if (!LittleFS.begin()) return false;
 
-    // Crear directorio si no existe
     if (!LittleFS.exists("/iot") && !LittleFS.mkdir("/iot")) {
-        _mounted = false;
-        _bootCounterValid = false;
-        _bootIdPersistent = false;
         return false;
     }
 
-    // Leer boot counter; un archivo ausente es un contador válido en cero,
-    // pero un archivo ilegible/corrupto activa el modo degradado.
+    _mounted = true;
     _bootCounterValid = _readBootCount();
-    _bootIdPersistent = _bootCounterValid;
-
+    _bootIdPersistent = _bootCounterValid && !_bootIdConsumed;
     return true;
+}
+
+bool IoTStorage::begin() {
+    _mountAttempts = 0;
+    for (uint8_t attempt = 0; attempt < STORAGE_MOUNT_ATTEMPTS; ++attempt) {
+        ++_mountAttempts;
+        if (_mountLittleFS()) return true;
+    }
+
+    _mounted = false;
+    _bootCounterValid = false;
+    _bootIdPersistent = false;
+    return false;
+}
+
+bool IoTStorage::retryMount() {
+    if (_mounted) return true;
+
+    _mountAttempts = 0;
+    for (uint8_t attempt = 0; attempt < STORAGE_MOUNT_ATTEMPTS; ++attempt) {
+        ++_mountAttempts;
+        if (_mountLittleFS()) {
+            // El BOOT_ID se decide una sola vez por arranque. Si ya se
+            // consumió el fallback, no anunciar persistencia retrospectiva.
+            if (_bootIdConsumed) _bootIdPersistent = false;
+            return true;
+        }
+    }
+
+    _mounted = false;
+    _bootCounterValid = false;
+    _bootIdPersistent = false;
+    return false;
 }
 
 // ============================================================
@@ -67,6 +85,7 @@ bool IoTStorage::begin() {
 // ============================================================
 
 uint16_t IoTStorage::getBootId() {
+    _bootIdConsumed = true;
     if (!_mounted || !_bootCounterValid) {
         _bootIdPersistent = false;
         return _volatileBootId();
@@ -363,14 +382,23 @@ bool IoTStorage::saveAuthKey(const uint8_t* key, uint8_t len) {
 // ============================================================
 
 bool IoTStorage::format() {
-    bool ok = LittleFS.format();
-    if (ok) {
-        LittleFS.begin();
-        LittleFS.mkdir("/iot");
-        _bootCount = 0;
-        _setDefaults();
-    }
-    return ok;
+    // format() es una operación explícita y destructiva. Dejar el estado
+    // interno degradado hasta confirmar que el volumen vuelve a montar evita
+    // anunciar un filesystem utilizable si begin() posterior falla.
+    _mounted = false;
+    _bootCounterValid = false;
+    _bootIdPersistent = false;
+
+    if (!LittleFS.format()) return false;
+    if (!LittleFS.begin()) return false;
+    if (!LittleFS.exists("/iot") && !LittleFS.mkdir("/iot")) return false;
+
+    _setDefaults();
+    _bootCount = 0;
+    _bootCounterValid = true;
+    _mounted = true;
+    _bootIdPersistent = !_bootIdConsumed;
+    return true;
 }
 
 uint32_t IoTStorage::freeSpace() const {

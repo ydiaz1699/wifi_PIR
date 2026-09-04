@@ -134,6 +134,73 @@ bool check_reliable_session_paths() {
     return true;
 }
 
+uint8_t callbackCount = 0;
+
+void countPackets(const IoTPacket&, IPAddress, uint16_t) {
+    ++callbackCount;
+}
+
+bool makeValidEvent(IoTPacket& packet, uint16_t bootId, uint32_t seq) {
+    packet = makePacketFrom(static_cast<uint8_t>(MsgType::EVENT),
+                            0x02, 0x01, bootId, seq,
+                            IOT_FLAG_ACK_REQUIRED | IOT_FLAG_RELIABLE);
+    return packet.addTLV_uint8(TlvTag::EVENT_TYPE, 0x06) &&
+           packet.addTLV_uint8(TlvTag::EVENT_VALUE, 1) &&
+           packet.addTLV_int8(TlvTag::RSSI_VAL, -50);
+}
+
+bool check_diagnostic_hello_tlvs() {
+    HostUdp::reset();
+    IoTNode node(0x02, 4210);
+    node.begin(1234);
+    node.setFirmwareVersion("4.3.0");
+    node.setBootReason(BootReason::WATCHDOG);
+    node.sendHello(IPAddress(192, 168, 0, 201), 4210, 0x02, "PIR Entrada");
+    node.loop();
+    node.loop();
+
+    IoTPacket sent{};
+    if (!expect(lastSentPacket(sent), "HELLO diagnóstico no fue transmitido")) return false;
+    char version[12] = "";
+    uint8_t reason = 0;
+    if (!expect(sent.getTLV_string(TlvTag::FW_VERSION, version, sizeof(version)),
+                "HELLO no contiene FW_VERSION configurada por la aplicación")) return false;
+    if (!expect(sent.getTLV_uint8(TlvTag::BOOT_REASON, reason),
+                "HELLO no contiene BOOT_REASON")) return false;
+    return expect(std::strcmp(version, "4.3.0") == 0 &&
+                      reason == static_cast<uint8_t>(BootReason::WATCHDOG),
+                  "TLV diagnóstico HELLO tiene valores incorrectos");
+}
+
+bool check_dedup_seq_wraparound() {
+    HostUdp::reset();
+    callbackCount = 0;
+    IoTNode node(0x01, 4210);
+    node.begin(100);
+    node.onPacketReceived(countPackets);
+
+    IoTPacket beforeWrap{};
+    IoTPacket afterWrap{};
+    if (!expect(makeValidEvent(beforeWrap, 50, 0xFFFFFFFEUL),
+                "no se pudo construir EVENT antes de wrap")) return false;
+    if (!expect(makeValidEvent(afterWrap, 50, 1),
+                "no se pudo construir EVENT después de wrap")) return false;
+
+    if (!expect(injectPacket(beforeWrap), "no se inyectó EVENT antes de wrap")) return false;
+    node.loop();
+    if (!expect(callbackCount == 1, "EVENT inicial no llegó al callback")) return false;
+
+    if (!expect(injectPacket(afterWrap), "no se inyectó EVENT después de wrap")) return false;
+    node.loop();
+    if (!expect(callbackCount == 2,
+                "SEQ 1 después de 0xFFFFFFFF fue tratado como replay")) return false;
+
+    if (!expect(injectPacket(beforeWrap), "no se reinyectó EVENT antiguo")) return false;
+    node.loop();
+    return expect(callbackCount == 2 && node.getStats().duplicates > 0,
+                  "EVENT antiguo volvió a producir efecto después de wrap");
+}
+
 bool check_name_limit() {
     HostUdp::reset();
     IoTNode receiver(0x01, 4210);
@@ -287,7 +354,7 @@ bool check_node_api() {
     invalidHello.begin(1234);
     invalidHello.sendHello(central, 4210,
                            AlarmProfile::toWire(AlarmProfile::DeviceType::PIR_SENSOR),
-                           "nombre demasiado largo para el payload de discovery");
+                           "nombre demasiado largo para el payload de discovery con suficientes caracteres adicionales");
     if (!expect(invalidHello.queuedCount() == 0,
                 "HELLO sin DEVICE_NAME no fue descartado")) {
         return false;
@@ -314,6 +381,8 @@ int main() {
     if (!check_node_api()) return 3;
     if (!check_reliable_session_paths()) return 4;
     if (!check_name_limit()) return 5;
+    if (!check_dedup_seq_wraparound()) return 6;
+    if (!check_diagnostic_hello_tlvs()) return 7;
 
     std::puts("OK: host compile check wifi_PIR");
     return 0;
