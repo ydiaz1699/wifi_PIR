@@ -31,6 +31,10 @@ void setupOTA() {
     });
 
     ArduinoOTA.onEnd([]() {
+        // Bajar el flag ANTES del log/reinicio: si onEnd se dispara sin que el
+        // reinicio llegue a ejecutarse, otaEnProgreso() no debe quedar atascado
+        // en true y congelar el loop() de sensores.
+        actualizacionEnProgreso = false;
         LOG_INFO("OTA finalizada; el equipo se reiniciará");
     });
 

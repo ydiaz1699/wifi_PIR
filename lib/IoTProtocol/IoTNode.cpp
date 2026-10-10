@@ -34,7 +34,7 @@ IoTNode::IoTNode(uint8_t deviceId, uint16_t udpPort)
     : _deviceId(deviceId), _udpPort(udpPort), _bootId(0), _seq(0),
       _queueCount(0), _overflowPolicy(QueueOverflow::DROP_OLDEST_BG),
       _hbEnabled(false), _hbInterval(IOT_HEARTBEAT_INTERVAL),
-      _lastHb(0), _lastStateCheck(0), _handler(nullptr),
+      _lastHb(0), _hbJitter(0), _lastStateCheck(0), _handler(nullptr),
       _firmwareVersion(nullptr), _bootReason(BootReason::UNKNOWN)
 {
     memset(_queue, 0, sizeof(_queue));
@@ -654,18 +654,27 @@ void IoTNode::enableHeartbeat(IPAddress destIP, uint16_t destPort, unsigned long
     _hbPort = destPort;
     _hbInterval = intervalMs;
     _lastHb = millis();
+    _hbJitter = 0;  // El primer período usa el intervalo exacto; el jitter se sortea tras cada envío.
 }
 
 void IoTNode::disableHeartbeat() { _hbEnabled = false; }
 
 void IoTNode::_sendHeartbeat() {
     unsigned long ahora = millis();
-    if (ahora - _lastHb < _hbInterval) return;
 
-    // Jitter: ±5 seconds randomizado para distribuir tráfico
-    // cuando hay muchos dispositivos en la red
-    long jitter = random(-5000, 5000);
-    _lastHb = ahora + jitter;
+    // Jitter: ±5 s para distribuir el tráfico cuando hay muchos dispositivos.
+    // El jitter se aplica al UMBRAL de disparo, no al timestamp almacenado:
+    // _lastHb guarda siempre `ahora`, así el período queda centrado en
+    // _hbInterval (±5 s) y no se sesga ni acumula (antes _lastHb = ahora +
+    // jitter sesgaba el período a ~55-64 s). Guarda anti-underflow: con
+    // jitter negativo cerca del arranque, _hbInterval + jitter podría quedar
+    // por debajo de cero en unsigned long; se acota a cero.
+    long umbral = static_cast<long>(_hbInterval) + _hbJitter;
+    if (umbral < 0) umbral = 0;
+    if (ahora - _lastHb < static_cast<unsigned long>(umbral)) return;
+
+    _lastHb = ahora;
+    _hbJitter = random(-5000, 5000);
 
     IoTPacket pkt;
     pkt.version = IOT_PROTOCOL_VER;
@@ -822,8 +831,17 @@ bool IoTNode::sendEvent(uint8_t eventCode, IPAddress destIP, uint16_t destPort, 
     pkt.src = _deviceId;
     pkt.dst = destId;
     pkt.bootId = _bootId;
-    pkt.seq = getNextSeq();
-    pkt.flags = IOT_FLAG_ACK_REQUIRED | IOT_FLAG_RELIABLE;
+    // Reservar el próximo SEQ sin consumirlo todavía: si el evento no llega a
+    // encolarse (TLV incompleto o cola llena) no debe quedar un SEQ fantasma
+    // que la central interprete como un hueco de secuencia. El SEQ solo se
+    // confirma (avanza _seq) cuando enqueue() tiene éxito.
+    uint32_t reservedSeq = _seq + 1;
+    if (reservedSeq == 0) reservedSeq = 1;
+    pkt.seq = reservedSeq;
+    // URGENT: una detección (MOTION/TIMBRE) no es descartable para hacer
+    // sitio a telemetría; además se promueve antes en la cola. Si la cola se
+    // llena de EVENT URGENT, enqueue() devolverá false y el caller lo reporta.
+    pkt.flags = IOT_FLAG_ACK_REQUIRED | IOT_FLAG_RELIABLE | IOT_FLAG_URGENT;
     pkt.clearPayload();
 
     // EVENT policy: EVENT_TYPE, EVENT_VALUE and RSSI are built as one
@@ -838,7 +856,12 @@ bool IoTNode::sendEvent(uint8_t eventCode, IPAddress destIP, uint16_t destPort, 
                               "EVENT", "RSSI_VAL");
     if (missing != 0) return false;
 
-    return enqueue(pkt, destIP, destPort);
+    // Confirmar el SEQ reservado solo si el evento se encola realmente.
+    const bool queued = enqueue(pkt, destIP, destPort);
+    if (queued) {
+        _seq = reservedSeq;  // Commit del SEQ reservado arriba.
+    }
+    return queued;
 }
 
 

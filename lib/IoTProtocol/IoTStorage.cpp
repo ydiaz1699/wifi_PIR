@@ -110,10 +110,29 @@ uint16_t IoTStorage::getBootId() {
 }
 
 uint16_t IoTStorage::_volatileBootId() const {
-    // Opción A del brief: conservar operación degradada, pero hacerla
-    // explícita. Este valor no garantiza unicidad entre reinicios.
-    uint16_t id = static_cast<uint16_t>(micros()) ^
-                  static_cast<uint16_t>(analogRead(A0) << 8);
+    // MODO DEGRADADO del BOOT_ID (cuando !isBootIdPersistent()):
+    // Si LittleFS no monta o el contador no persiste, el BOOT_ID no es
+    // determinístico entre reinicios y PUEDE repetirse. La central deduplica
+    // por el par (src, bootId) con una ventana deslizante de SEQ; si tras un
+    // reinicio este emisor reutiliza un bootId ya visto, la central puede
+    // descartar como *replay* los primeros eventos (SEQ bajos) hasta que el
+    // SEQ supere la ventana. Esto NO corrompe el protocolo, pero sí puede
+    // perder eventos justo tras un arranque degradado.
+    //
+    // Mitigación (no elimina, solo reduce la probabilidad de colisión):
+    // combinar varias fuentes de entropía disponibles en el core ESP8266
+    // sin cambiar el protocolo ni la ventana de dedup. Se mantiene el tipo
+    // uint16_t y la garantía id != 0.
+    uint32_t entropy = micros();
+    entropy ^= ESP.getCycleCount();
+    entropy ^= ESP.getChipId();
+    // Varias lecturas del ADC flotante aportan ruido adicional.
+    for (uint8_t i = 0; i < 4; ++i) {
+        entropy = (entropy << 3) ^ static_cast<uint32_t>(analogRead(A0));
+        entropy ^= micros();
+    }
+    // Plegar los 32 bits a 16 mezclando mitad alta y baja.
+    uint16_t id = static_cast<uint16_t>(entropy ^ (entropy >> 16));
     if (id == 0) id = 1;
     return id;
 }
@@ -264,6 +283,20 @@ bool IoTStorage::loadConfig() {
     if (actualChecksum != expectedChecksum) {
         _setDefaults();
         return false;
+    }
+
+    // Revalidar rangos leídos de LittleFS con los MISMOS límites que
+    // IoTConfigHandler (antirebote 100-10000 ms, heartbeat 5000-600000 ms).
+    // Un archivo con checksum válido pero valores fuera de rango (p. ej.
+    // antirebote=0 que satura la cola, o heartbeat=0 que dispara tormentas)
+    // se sanea a los defaults de _setDefaults() en lugar de aceptarse.
+    if (candidate.antireboteMs < IOT_CFG_ANTIREBOTE_MIN_MS ||
+        candidate.antireboteMs > IOT_CFG_ANTIREBOTE_MAX_MS) {
+        candidate.antireboteMs = IOT_CFG_ANTIREBOTE_DEFAULT_MS;
+    }
+    if (candidate.heartbeatIntervalMs < IOT_CFG_HEARTBEAT_MIN_MS ||
+        candidate.heartbeatIntervalMs > IOT_CFG_HEARTBEAT_MAX_MS) {
+        candidate.heartbeatIntervalMs = IOT_CFG_HEARTBEAT_DEFAULT_MS;
     }
 
     _config = candidate;

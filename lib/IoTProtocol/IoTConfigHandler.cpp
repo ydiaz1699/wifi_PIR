@@ -20,11 +20,16 @@ IoTConfigHandler::IoTConfigHandler(IoTStorage &storage, IoTNode &node)
 bool IoTConfigHandler::handleConfig(const IoTPacket &pkt, IPAddress remoteIP, uint16_t remotePort) {
     IoTConfig &cfg = _storage.config();
     uint8_t changesApplied = 0;
+    // TLV de configuración presentes en el paquete (independiente de si
+    // pasaron el rango). Permite distinguir "no vino ningún parámetro de
+    // config" de "vinieron parámetros pero todos fueron inválidos".
+    uint8_t cfgTlvsPresentes = 0;
 
     // --- Heartbeat interval ---
     uint32_t newHb = 0;
     if (pkt.getTLV_uint32(TlvTag::CFG_HEARTBEAT_MS, newHb)) {
-        if (newHb >= 5000 && newHb <= 600000) {  // 5s – 10min
+        cfgTlvsPresentes++;
+        if (newHb >= IOT_CFG_HEARTBEAT_MIN_MS && newHb <= IOT_CFG_HEARTBEAT_MAX_MS) {  // 5s – 10min
             cfg.heartbeatIntervalMs = newHb;
             changesApplied++;
         }
@@ -33,7 +38,9 @@ bool IoTConfigHandler::handleConfig(const IoTPacket &pkt, IPAddress remoteIP, ui
     // --- Antirebote ---
     uint32_t newAntirebote = 0;
     if (pkt.getTLV_uint32(TlvTag::CFG_ANTIREBOTE_MS, newAntirebote)) {
-        if (newAntirebote >= 100 && newAntirebote <= 10000) {  // 100ms – 10s
+        cfgTlvsPresentes++;
+        if (newAntirebote >= IOT_CFG_ANTIREBOTE_MIN_MS &&
+            newAntirebote <= IOT_CFG_ANTIREBOTE_MAX_MS) {  // 100ms – 10s
             cfg.antireboteMs = newAntirebote;
             changesApplied++;
         }
@@ -42,6 +49,7 @@ bool IoTConfigHandler::handleConfig(const IoTPacket &pkt, IPAddress remoteIP, ui
     // --- Device name ---
     char newName[IOT_STORAGE_NAME_MAX] = "";
     if (pkt.getTLV_string(TlvTag::CFG_DEVICE_NAME, newName, sizeof(newName))) {
+        cfgTlvsPresentes++;
         if (strlen(newName) > 0) {
             strncpy(cfg.deviceName, newName, IOT_STORAGE_NAME_MAX - 1);
             cfg.deviceName[IOT_STORAGE_NAME_MAX - 1] = '\0';
@@ -52,6 +60,7 @@ bool IoTConfigHandler::handleConfig(const IoTPacket &pkt, IPAddress remoteIP, ui
     // --- Auth enable/disable ---
     uint8_t authEnable = 0xFF;
     if (pkt.getTLV_uint8(TlvTag::CFG_AUTH_ENABLE, authEnable)) {
+        cfgTlvsPresentes++;
         if (authEnable <= 1) {
             cfg.authEnabled = (authEnable == 1);
             changesApplied++;
@@ -73,8 +82,16 @@ bool IoTConfigHandler::handleConfig(const IoTPacket &pkt, IPAddress remoteIP, ui
         cfg.configVersion = cfgVer;
     }
 
+    // --- Resultado base ---
+    // Si llegaron TLV de configuración (heartbeat/antirebote/name/auth) pero
+    // ninguno fue válido por rango, el cliente debe recibir INVALID_VALUE en
+    // vez de un OK engañoso. Si el paquete no traía parámetros aplicables
+    // (p. ej. solo REBOOT/RESET_STATS/VERSION), se mantiene OK.
+    ResultCode result =
+        (cfgTlvsPresentes > 0 && changesApplied == 0) ? ResultCode::INVALID_VALUE
+                                                       : ResultCode::OK;
+
     // --- Persistir si hubo cambios ---
-    ResultCode result = ResultCode::OK;
     if (changesApplied > 0) {
         if (!_storage.saveConfig()) {
             result = ResultCode::FAIL;

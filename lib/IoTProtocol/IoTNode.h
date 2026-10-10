@@ -303,6 +303,7 @@ private:
     uint16_t _hbPort;
     unsigned long _hbInterval;
     unsigned long _lastHb;
+    long          _hbJitter;   // Jitter (±5 s) aplicado al umbral del próximo heartbeat
 
     // Device state tracking
     unsigned long _lastStateCheck;

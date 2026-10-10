@@ -1,0 +1,21 @@
+#pragma once
+// PLANTILLA de configuración de red (versionada).
+//
+// network_config.h está en .gitignore y NO se versiona (puede contener la
+// topología concreta de tu red). Antes de compilar, copia este archivo a
+// network_config.h en la raíz del repo y ajusta gateway/subnet/puerto a tu red:
+//
+//   copy network_config.h.template network_config.h   (Windows)
+//   cp   network_config.h.template network_config.h   (Linux/macOS)
+//
+#include <ESP8266WiFi.h>
+
+inline IPAddress redGateway() { return IPAddress(192, 168, 0, 1); }
+inline IPAddress redSubnet()  { return IPAddress(255, 255, 255, 0); }
+
+// Fuente única de verdad del puerto UDP. La referencian PUERTO_UDP (abajo,
+// para legacy/emisor_pir) y UDP_PORT en device_config.cpp (emisor unificado),
+// evitando divergencia silenciosa entre ambos.
+#define IOT_UDP_PORT_DEFAULT 4210
+
+const unsigned int PUERTO_UDP = IOT_UDP_PORT_DEFAULT;
