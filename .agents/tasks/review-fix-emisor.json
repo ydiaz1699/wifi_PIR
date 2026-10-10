@@ -1,0 +1,8 @@
+{
+  "verdict": "APPROVED",
+  "findings": [
+    "OTA de un solo disparo tras reconexión: setupOTA() queda bloqueado por otaInicializada tras el primer WL_CONNECTED; si WiFi cae y vuelve, no se reinstala ArduinoOTA. No bloqueante, documentado y aceptado por el plan.",
+    "BOOT_ID volátil sigue siendo probabilístico en modo degradado (LittleFS no monta): puede repetirse y provocar descarte por replay de los primeros eventos. No bloqueante; la mejora de entropía reduce (no elimina) la colisión y está documentado."
+  ],
+  "reviewDoc": "c:\\Users\\Alex\\Desktop\\1-Github\\wifi_PIR/.agents/tasks/review-fix-emisor.md"
+}

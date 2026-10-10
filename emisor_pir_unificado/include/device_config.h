@@ -1,5 +1,5 @@
 /**
- * Configuración específica de este emisor — V4.1
+ * Configuración específica de este emisor — V4.3
  *
  * Para crear un nuevo emisor (PIR02, TIMBRE01, PUERTA01, etc.):
  * 1. Cambiar MY_DEVICE_ID a un ID único (ver rangos en IoTProtocol.h)

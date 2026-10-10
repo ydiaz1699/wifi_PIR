@@ -60,6 +60,19 @@
 #define IOT_STORAGE_NAME_MAX IOT_DEVICE_NAME_MAX
 
 // ============================================================
+// Rangos válidos de configuración (fuente única de verdad)
+// ============================================================
+// Los usan IoTConfigHandler (validar CONFIG remoto) e IoTStorage
+// (revalidar al leer de LittleFS). Mantener ambos con los MISMOS límites
+// evita que una ruta acepte valores que la otra rechaza.
+#define IOT_CFG_ANTIREBOTE_MIN_MS       100UL      // 100 ms
+#define IOT_CFG_ANTIREBOTE_MAX_MS       10000UL    // 10 s
+#define IOT_CFG_ANTIREBOTE_DEFAULT_MS   200UL      // default de _setDefaults()
+#define IOT_CFG_HEARTBEAT_MIN_MS        5000UL     // 5 s
+#define IOT_CFG_HEARTBEAT_MAX_MS        600000UL   // 10 min
+#define IOT_CFG_HEARTBEAT_DEFAULT_MS    60000UL    // default de _setDefaults()
+
+// ============================================================
 // Device IDs (1 byte: 0-255)
 // ============================================================
 // Convención (no restricción en código):

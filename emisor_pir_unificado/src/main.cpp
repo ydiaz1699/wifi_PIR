@@ -82,6 +82,31 @@ static void iniciarWiFi() {
     LOG_INFO("WiFi conectando...");
 }
 
+// Reconexión WiFi NO BLOQUEANTE (máquina de estados), siguiendo el patrón del
+// receptor. Al detectar la transición a WL_CONNECTED, (re)inicializa OTA:
+// setupOTA() es idempotente (hace return si ya está inicializada o si no hay
+// WiFi), por lo que OTA se instala una sola vez en el primer WL_CONNECTED y
+// las reconexiones posteriores no lo rompen ni lo reinstalan.
+static void manejarWiFi() {
+    if (WiFi.status() == WL_CONNECTED) {
+        if (wifiConectando) {
+            wifiConectando = false;
+            LOG_INFO("WiFi OK: %s", WiFi.localIP().toString().c_str());
+        }
+        // Inicializar OTA tras conectar (idempotente: no reinstala si ya lo está).
+        setupOTA();
+        return;
+    }
+
+    unsigned long ahora = millis();
+    if (!wifiConectando) {
+        iniciarWiFi();
+    } else if (ahora - ultimoIntentoWiFi > 5000) {
+        LOG_WARN("WiFi reintentando...");
+        iniciarWiFi();
+    }
+}
+
 static const char* bootReasonToString(BootReason reason) {
     switch (reason) {
         case BootReason::POWER_ON:       return "POWER_ON";
@@ -94,7 +119,9 @@ static const char* bootReasonToString(BootReason reason) {
     }
 }
 
-static BootReason detectBootReason() {
+// Mapea el texto de ESP.getResetReason() a BootReason. Se usa SOLO como
+// fallback cuando el enum numérico no determina una causa clara.
+static BootReason bootReasonFromText() {
     const String resetInfo = ESP.getResetReason();
     const char* text = resetInfo.c_str();
     if (std::strstr(text, "wdt") || std::strstr(text, "WDT") ||
@@ -110,6 +137,29 @@ static BootReason detectBootReason() {
         return BootReason::SOFTWARE_RESET;
     }
     return BootReason::UNKNOWN;
+}
+
+static BootReason detectBootReason() {
+    // Fuente PRIMARIA: enum numérico del core, estable entre versiones.
+    // El texto de getResetReason() queda como red de seguridad (fallback)
+    // cuando el enum no determina una causa clara (REASON_DEFAULT_RST o un
+    // valor no mapeado), evitando degradar silenciosamente a UNKNOWN por
+    // cambios de formato del texto.
+    const rst_info* info = ESP.getResetInfoPtr();
+    if (info) {
+        switch (info->reason) {
+            case REASON_WDT_RST:         return BootReason::WATCHDOG;
+            case REASON_SOFT_WDT_RST:    return BootReason::WATCHDOG;
+            case REASON_EXCEPTION_RST:   return BootReason::CRASH;
+            case REASON_SOFT_RESTART:    return BootReason::SOFTWARE_RESET;
+            case REASON_DEEP_SLEEP_AWAKE:return BootReason::DEEP_SLEEP;
+            case REASON_EXT_SYS_RST:     return BootReason::POWER_ON;
+            case REASON_DEFAULT_RST:     // Arranque normal: afinar con el texto.
+            default:                     break;
+        }
+    }
+    // Fallback por texto cuando el enum no fue concluyente.
+    return bootReasonFromText();
 }
 
 static void monitorRuntimeHealth() {
@@ -297,20 +347,11 @@ void setup() {
         LOG_ERROR("BOOT_ID degradado: la sesión puede repetirse tras otro reinicio");
     }
 
+    // Arrancar la conexión WiFi sin bloquear: no se espera a WL_CONNECTED en
+    // setup(). loop()->manejarWiFi() gestiona la conexión/reconexión e
+    // inicializa OTA al primer WL_CONNECTED. node.begin() y el resto del setup
+    // toleran encolar sin red (el core bufferea hasta que haya conexión).
     iniciarWiFi();
-
-    // Esperar WiFi (máximo 10s)
-    unsigned long t0 = millis();
-    while (WiFi.status() != WL_CONNECTED && millis() - t0 < 10000) {
-        ESP.wdtFeed();
-        delay(100);
-    }
-
-    if (WiFi.status() == WL_CONNECTED) {
-        setupOTA();
-    } else {
-        LOG_WARN("WiFi no disponible: OTA se inicializará al reconectar");
-    }
 
     // IoTNode con BOOT_ID persistente. La política de auth queda instalada
     // antes de registrar el callback y antes de enviar HELLO; no se llama a
@@ -375,9 +416,15 @@ void loop() {
         if (ahora - ultimaDeteccionPIR > antirebotePIR) {
             ultimaDeteccionPIR = ahora;
             LOG_INFO("PIR detectado");
-            node.sendEvent(AlarmProfile::toWire(AlarmProfile::EventCode::MOTION),
-                           central_IP, UDP_PORT);
-            LOG_INFO("MOTION encolado (q=%d)", node.queuedCount());
+            // sendEvent() devuelve false si la cola está llena (evento perdido);
+            // reportar la verdad en vez de afirmar siempre "encolado".
+            if (node.sendEvent(AlarmProfile::toWire(AlarmProfile::EventCode::MOTION),
+                               central_IP, UDP_PORT)) {
+                LOG_INFO("MOTION encolado (q=%d)", node.queuedCount());
+            } else {
+                LOG_WARN("MOTION NO encolado: cola llena, evento perdido (q=%d)",
+                         node.queuedCount());
+            }
         }
     }
     pirAnterior = pirActual;
@@ -389,9 +436,13 @@ void loop() {
         if (ahora - ultimaDeteccionTimbre > antireboteTimbre) {
             ultimaDeteccionTimbre = ahora;
             LOG_INFO("Timbre presionado");
-            node.sendEvent(AlarmProfile::toWire(AlarmProfile::EventCode::TIMBRE),
-                           central_IP, UDP_PORT);
-            LOG_INFO("TIMBRE encolado (q=%d)", node.queuedCount());
+            if (node.sendEvent(AlarmProfile::toWire(AlarmProfile::EventCode::TIMBRE),
+                               central_IP, UDP_PORT)) {
+                LOG_INFO("TIMBRE encolado (q=%d)", node.queuedCount());
+            } else {
+                LOG_WARN("TIMBRE NO encolado: cola llena, evento perdido (q=%d)",
+                         node.queuedCount());
+            }
         }
     }
     timbreAnterior = timbreActual;
