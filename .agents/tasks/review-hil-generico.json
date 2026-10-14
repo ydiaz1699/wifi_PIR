@@ -1,0 +1,18 @@
+{
+  "verdict": "APPROVED",
+  "findings": [
+    {
+      "label": "Ventana de correlación malgastada sin Pico",
+      "severity": "no-bloqueante",
+      "confidence": "possible",
+      "detalle": "En _estimular_y_leer se espera la ventana completa (antirrebote_ms + 400 ms) incluso cuando el comando a la Pico ya falló por ausencia de hardware. El resultado es correcto, pero el error llega con cientos de ms de retraso. Opcional: cortocircuitar la espera cuando resultado_pico['ok'] es False."
+    },
+    {
+      "label": "_safe_inicial_hecho se marca hecho con 0 canales",
+      "severity": "no-bloqueante",
+      "confidence": "confirmed",
+      "detalle": "Cuando el banco está cargado pero sin GPIO, _asegurar_safe_inicial marca la bandera sin haber contactado la Pico. Es inocuo (no hay pines que asegurar), pero conviene un comentario que lo explicite para no confundir en el futuro."
+    }
+  ],
+  "reviewDoc": "c:\\Users\\Alex\\Desktop\\1-Github\\wifi_PIR\\.agents\\tasks\\review-hil-generico.md"
+}

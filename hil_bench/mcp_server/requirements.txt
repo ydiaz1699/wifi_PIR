@@ -1,0 +1,15 @@
+# Dependencias del MCP server del banco HIL genérico.
+#
+# Se fija mcp<2 a propósito: la API de alto nivel usada aquí es FastMCP
+# (from mcp.server.fastmcp import FastMCP, decorador @mcp.tool,
+# mcp.run(transport="stdio")), que vive en la serie 1.x del SDK oficial.
+# En mcp 2.x FastMCP se renombró a MCPServer y la API cambió; mantener el
+# rango <2 preserva el patrón documentado en el README y en server.py.
+# El extra [cli] aporta utilidades de línea de comandos (p.ej. 'mcp dev').
+mcp[cli]>=1.2,<2
+
+# Comunicación serial con la Pico y el DUT (dispositivo bajo prueba).
+pyserial>=3.5,<4
+
+# Carga de la configuración declarativa del banco (bench.yaml).
+pyyaml>=6,<7

@@ -1,0 +1,39 @@
+# Banco HIL de EJEMPLO para el proyecto wifi_PIR.
+#
+# Describe los canales (entradas físicas del DUT que el banco puede accionar)
+# del emisor D1 mini (ESP8266) de wifi_PIR. El banco en sí es genérico: aquí
+# 'timbre' y 'pir' son solo ETIQUETAS que damos a dos canales; los tipos
+# genéricos son 'boton' (momentáneo) e 'interruptor' (sostenido on/off).
+#
+# Registro en Kiro: apunta la variable de entorno HIL_BENCH_CONFIG a la ruta de
+# este archivo (ver README.md). Los puertos van en null: se fijan por entorno
+# (PICO_PORT / DUT_PORT), que tienen prioridad sobre lo que ponga aquí.
+
+nombre: wifi_PIR
+
+# Puertos serie. null => se toman de las variables de entorno PICO_PORT /
+# DUT_PORT (que siempre tienen prioridad si están definidas).
+pico_port: null       # COMx de la Raspberry Pi Pico (las "manos")
+dut_port: null        # COMx del D1 mini emisor (el DUT, los "oídos")
+baudrate: 115200
+
+canales:
+  # Timbre del emisor: un pulsador => actuador momentáneo => tipo 'boton'.
+  # Cableado en D3/GPIO0 del ESP8266 con INPUT_PULLUP, activo en LOW. GPIO0 es
+  # pin boot-strap: su opto en reposo (apagado) deja D3 en alto por el pull-up,
+  # así el estado seguro NO lo activa durante el reset del DUT.
+  - etiqueta: timbre
+    tipo: boton
+    gpio_pico: 2            # GP2 de la Pico -> opto PC817 -> D3 del emisor
+    polaridad: activo_bajo  # el DUT lee 'activo' cuando D3 va a LOW
+    antirrebote_ms: 800     # informativo: antirrebote del timbre en el firmware
+    descripcion: 'Pulsador de timbre, D3/GPIO0 del emisor, INPUT_PULLUP activo en LOW'
+
+  # Entrada PIR del emisor: nivel de movimiento sostenido => tipo 'interruptor'.
+  # Cableado en D2/GPIO4 con pull-down, activo en ALTO.
+  - etiqueta: pir
+    tipo: interruptor
+    gpio_pico: 3            # GP3 de la Pico -> opto PC817 -> D2 del emisor
+    polaridad: activo_alto  # el DUT lee 'activo' cuando D2 va a ALTO
+    antirrebote_ms: 200     # informativo: antirrebote del PIR en el firmware
+    descripcion: 'Entrada PIR, D2/GPIO4 del emisor, pull-down, activo en ALTO'
